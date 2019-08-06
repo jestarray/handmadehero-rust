@@ -88,6 +88,7 @@ fn win32_resize_dibsection(width: i32, height: i32) {
             header.biBitCount = (BYTES_PER_PIXEL * 8) as _;
             header.biCompression = BI_RGB;
             VirtualFree(BITMAPMEMORY, 0, MEM_RELEASE);
+            BITMAPMEMORY = null_mut();
         }
         if BITMAPMEMORY.is_null() {
             let bitmapmemorysize = (BITMAP_WIDTH * BITMAP_HEIGHT) * BYTES_PER_PIXEL;
