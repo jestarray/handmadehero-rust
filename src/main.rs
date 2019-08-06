@@ -1,26 +1,32 @@
-use std::convert::TryInto;
-use std::ffi::{c_void, OsStr};
+#![windows_subsystem = "windows"]
 
-use std::iter::once;
-use std::os::windows::ffi::OsStrExt;
-
-use winapi::um::wingdi::{
-    StretchDIBits, BITMAPINFO, BITMAPINFOHEADER, BI_RGB, DIB_RGB_COLORS, RGBQUAD, SRCCOPY,
+use std::{
+    convert::TryInto,
+    ffi::{c_void, OsStr},
+    iter::once,
+    mem::{size_of, zeroed},
+    os::windows::ffi::OsStrExt,
+    ptr::null_mut,
 };
 
-use winapi::um::winnt::{MEM_COMMIT, MEM_RELEASE, PAGE_READWRITE};
-
 use kernel32::{GetModuleHandleW, VirtualAlloc, VirtualFree};
-use std::mem::{size_of, zeroed};
-use std::ptr::null_mut;
-use winapi::shared::minwindef::{HINSTANCE, LPARAM, LRESULT, UINT, WPARAM};
-use winapi::shared::windef::{HDC, HWND, RECT};
-
-use winapi::um::winuser::{
-    BeginPaint, CreateWindowExW, DefWindowProcW, DispatchMessageW, EndPaint, GetClientRect,
-    GetMessageW, RegisterClassW, TranslateMessage, CS_HREDRAW, CS_OWNDC, CS_VREDRAW, CW_USEDEFAULT,
-    MSG, PAINTSTRUCT, WM_ACTIVATEAPP, WM_CLOSE, WM_DESTROY, WM_PAINT, WM_SIZE, WNDCLASSW,
-    WS_OVERLAPPEDWINDOW, WS_VISIBLE,
+use winapi::{
+    shared::{
+        minwindef::{HINSTANCE, LPARAM, LRESULT, UINT, WPARAM},
+        windef::{HDC, HWND, RECT},
+    },
+    um::{
+        wingdi::{
+            StretchDIBits, BITMAPINFO, BITMAPINFOHEADER, BI_RGB, DIB_RGB_COLORS, RGBQUAD, SRCCOPY,
+        },
+        winnt::{MEM_COMMIT, MEM_RELEASE, PAGE_READWRITE},
+        winuser::{
+            BeginPaint, CreateWindowExW, DefWindowProcW, DispatchMessageW, EndPaint, GetClientRect,
+            GetMessageW, RegisterClassW, TranslateMessage, CS_HREDRAW, CS_OWNDC, CS_VREDRAW,
+            CW_USEDEFAULT, MSG, PAINTSTRUCT, WM_ACTIVATEAPP, WM_CLOSE, WM_DESTROY, WM_PAINT,
+            WM_SIZE, WNDCLASSW, WS_OVERLAPPEDWINDOW, WS_VISIBLE,
+        },
+    },
 };
 
 static mut RUNNING: bool = true;
