@@ -30,7 +30,6 @@ use winapi::{
 };
 
 static mut RUNNING: bool = true;
-
 static mut BITMAPMEMORY: *mut c_void = 0 as *mut c_void;
 static mut BITMAP_WIDTH: i32 = 0;
 static mut BITMAP_HEIGHT: i32 = 0;
@@ -75,31 +74,34 @@ fn print_message(msg: &str) -> Result<(), Error> {
 }
  */
 fn win32_resize_dibsection(width: i32, height: i32) {
+    const BYTES_PER_PIXEL: i32 = 4;
+
     unsafe {
-        if BITMAPMEMORY != zeroed() {
+        if width != BITMAP_WIDTH || height != BITMAP_HEIGHT {
+            BITMAP_WIDTH = width;
+            BITMAP_HEIGHT = height;
+            let header = &mut BITMAPINFO.bmiHeader;
+            header.biSize = size_of::<BITMAPINFOHEADER>() as u32;
+            header.biWidth = BITMAP_WIDTH;
+            header.biHeight = -BITMAP_HEIGHT;
+            header.biPlanes = 1;
+            header.biBitCount = (BYTES_PER_PIXEL * 8) as _;
+            header.biCompression = BI_RGB;
             VirtualFree(BITMAPMEMORY, 0, MEM_RELEASE);
         }
-        BITMAP_WIDTH = width;
-        BITMAP_HEIGHT = height;
-        BITMAPINFO.bmiHeader.biSize = size_of::<BITMAPINFOHEADER>() as u32;
-        BITMAPINFO.bmiHeader.biWidth = BITMAP_WIDTH;
-        BITMAPINFO.bmiHeader.biHeight = -BITMAP_HEIGHT;
-        BITMAPINFO.bmiHeader.biPlanes = 1;
-        BITMAPINFO.bmiHeader.biBitCount = 32;
-        BITMAPINFO.bmiHeader.biCompression = BI_RGB;
+        if BITMAPMEMORY.is_null() {
+            let bitmapmemorysize = (BITMAP_WIDTH * BITMAP_HEIGHT) * BYTES_PER_PIXEL;
+            BITMAPMEMORY = VirtualAlloc(
+                null_mut(),
+                bitmapmemorysize as u64,
+                MEM_COMMIT,
+                PAGE_READWRITE,
+            ) as *mut std::ffi::c_void;
+        }
     }
-    let bytes_per_pixel = 4;
     unsafe {
-        let bitmapmemorysize = (BITMAP_WIDTH * BITMAP_HEIGHT) * bytes_per_pixel;
-        BITMAPMEMORY = VirtualAlloc(
-            null_mut(),
-            bitmapmemorysize as u64,
-            MEM_COMMIT,
-            PAGE_READWRITE,
-        ) as *mut std::ffi::c_void;
-
         let mut row = BITMAPMEMORY as *mut u8;
-        let pitch = width * bytes_per_pixel;
+        let pitch = width * BYTES_PER_PIXEL;
         for _y in 0..BITMAP_HEIGHT {
             let mut pixel = row as *mut u8;
             for _x in 0..BITMAP_WIDTH {
