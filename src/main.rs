@@ -1,44 +1,39 @@
-extern crate kernel32;
-#[cfg(windows)]
-extern crate winapi;
 use std::convert::TryInto;
-use std::ffi::c_void;
-use std::ffi::OsStr;
-use std::io::Error;
+use std::ffi::{c_void, OsStr};
+
 use std::iter::once;
 use std::os::windows::ffi::OsStrExt;
-use winapi::shared::minwindef::DWORD;
-use winapi::shared::ntdef::VOID;
-use winapi::shared::windef::HDC;
-use winapi::um::wingdi::PatBlt;
-use winapi::um::wingdi::StretchDIBits;
-use winapi::um::wingdi::BITMAPINFO;
-use winapi::um::wingdi::BITMAPINFOHEADER;
-use winapi::um::wingdi::BI_RGB;
-use winapi::um::wingdi::BLACKNESS;
-use winapi::um::wingdi::DIB_RGB_COLORS;
-use winapi::um::wingdi::RGBQUAD;
-use winapi::um::wingdi::SRCCOPY;
-use winapi::um::wingdi::WHITENESS;
-use winapi::um::winnt::MEM_COMMIT;
-use winapi::um::winnt::MEM_RELEASE;
-use winapi::um::winnt::PAGE_READWRITE;
 
-use kernel32::*;
+use winapi::shared::windef::HDC;
+
+use winapi::um::wingdi::{
+    StretchDIBits, BITMAPINFO, BITMAPINFOHEADER, BI_RGB, DIB_RGB_COLORS, RGBQUAD, SRCCOPY,
+};
+
+use winapi::um::winnt::{MEM_COMMIT, MEM_RELEASE, PAGE_READWRITE};
+
+use kernel32::{GetModuleHandleW, VirtualAlloc, VirtualFree};
 use std::mem::{size_of, zeroed};
 use std::ptr::null_mut;
 use winapi::shared::minwindef::{HINSTANCE, LPARAM, LRESULT, UINT, WPARAM};
 use winapi::shared::windef::{HWND, RECT};
-use winapi::um::winuser::PAINTSTRUCT;
+
+use winapi::um::winuser::{
+    BeginPaint, CreateWindowExW, DefWindowProcW, DispatchMessageW, EndPaint, GetClientRect,
+    GetMessageW, RegisterClassW, TranslateMessage, CS_HREDRAW, CS_OWNDC, CS_VREDRAW, CW_USEDEFAULT,
+    MSG, PAINTSTRUCT, WNDCLASSW, WS_OVERLAPPEDWINDOW, WS_VISIBLE,
+};
+
+// TODO: Figure out why removing this line makes the window invisible
 use winapi::um::winuser::*;
 
 static mut RUNNING: bool = true;
 
 static mut BITMAPMEMORY: *mut c_void = 0 as *mut c_void;
-static mut bitmap_width: i32 = 0;
-static mut bitmap_height: i32 = 0;
+static mut BITMAP_WIDTH: i32 = 0;
+static mut BITMAP_HEIGHT: i32 = 0;
 
-static mut bitmapinfo: BITMAPINFO = BITMAPINFO {
+static mut BITMAPINFO: BITMAPINFO = BITMAPINFO {
     bmiHeader: BITMAPINFOHEADER {
         biSize: 0,
         biWidth: 0,
@@ -82,20 +77,20 @@ fn win32_resize_dibsection(width: i32, height: i32) {
         if BITMAPMEMORY != zeroed() {
             VirtualFree(BITMAPMEMORY, 0, MEM_RELEASE);
         }
-        bitmap_width = width;
-        bitmap_height = height;
-        bitmapinfo.bmiHeader.biSize = size_of::<BITMAPINFOHEADER>() as u32;
-        bitmapinfo.bmiHeader.biWidth = bitmap_width;
-        bitmapinfo.bmiHeader.biHeight = -bitmap_height;
-        bitmapinfo.bmiHeader.biPlanes = 1;
-        bitmapinfo.bmiHeader.biBitCount = 3;
-        bitmapinfo.bmiHeader.biCompression = BI_RGB;
+        BITMAP_WIDTH = width;
+        BITMAP_HEIGHT = height;
+        BITMAPINFO.bmiHeader.biSize = size_of::<BITMAPINFOHEADER>() as u32;
+        BITMAPINFO.bmiHeader.biWidth = BITMAP_WIDTH;
+        BITMAPINFO.bmiHeader.biHeight = -BITMAP_HEIGHT;
+        BITMAPINFO.bmiHeader.biPlanes = 1;
+        BITMAPINFO.bmiHeader.biBitCount = 3;
+        BITMAPINFO.bmiHeader.biCompression = BI_RGB;
     }
     let bytes_per_pixel = 4;
     unsafe {
-        let bitmapmemorysize = (bitmap_width * bitmap_height) * bytes_per_pixel;
+        let bitmapmemorysize = (BITMAP_WIDTH * BITMAP_HEIGHT) * bytes_per_pixel;
         BITMAPMEMORY = VirtualAlloc(
-            0 as *mut c_void,
+            null_mut(),
             bitmapmemorysize as u64,
             MEM_COMMIT,
             PAGE_READWRITE,
@@ -103,19 +98,19 @@ fn win32_resize_dibsection(width: i32, height: i32) {
 
         let mut row = BITMAPMEMORY as *mut u8;
         let pitch = width * bytes_per_pixel;
-        for y in 0..bitmap_height {
+        for _y in 0..BITMAP_HEIGHT {
             let mut pixel = row as *mut u8;
-            for x in 0..bitmap_width {
+            for _x in 0..BITMAP_WIDTH {
                 *pixel = 255;
                 pixel = pixel.offset(1);
 
-                *pixel = 0;
+                *pixel = 255;
                 pixel = pixel.offset(1);
                 //println!("running {:?}", *pixel);
-                *pixel = 0;
+                *pixel = 255;
                 pixel = pixel.offset(1);
 
-                *pixel = 1;
+                *pixel = 255;
                 pixel = pixel.offset(1);
             }
             row = row.offset(pitch.try_into().unwrap());
@@ -126,10 +121,10 @@ fn win32_resize_dibsection(width: i32, height: i32) {
 fn win32_update_window(
     device_context: HDC,
     window_rect: &RECT,
-    x: i32,
-    y: i32,
-    width: i32,
-    height: i32,
+    _x: i32,
+    _y: i32,
+    _width: i32,
+    _height: i32,
 ) {
     unsafe {
         let window_width = window_rect.right - window_rect.left;
@@ -146,21 +141,20 @@ fn win32_update_window(
             height, */
             0,
             0,
-            bitmap_width,
-            bitmap_height,
+            BITMAP_WIDTH,
+            BITMAP_HEIGHT,
             0,
             0,
             window_width,
             window_height,
-            0 as *const VOID,
-            &bitmapinfo,
+            std::ptr::null(),
+            &BITMAPINFO,
             DIB_RGB_COLORS,
             SRCCOPY,
         );
     }
 }
 
-#[no_mangle]
 unsafe extern "system" fn wnd_proc(
     window: HWND,
     message: UINT,
@@ -203,7 +197,7 @@ unsafe extern "system" fn wnd_proc(
 
             win32_update_window(device_context, &client_rect, x, y, width, height);
 
-            EndPaint(window, &mut paint);
+            EndPaint(window, &paint);
             0
         }
         _ => DefWindowProcW(window, message, wparam, lparam),
@@ -276,10 +270,8 @@ fn main() {
         let mut s = [1, 2, 3];
         let ptr: *mut u32 = s.as_mut_ptr();
 
-        unsafe {
-            println!("{}", *ptr.offset(1));
-            println!("{}", *ptr.offset(2));
-        }
+        println!("{}", *ptr.offset(1));
+        println!("{}", *ptr.offset(2));
     }
 
     create_window();
