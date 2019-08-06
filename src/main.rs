@@ -4,8 +4,6 @@ use std::ffi::{c_void, OsStr};
 use std::iter::once;
 use std::os::windows::ffi::OsStrExt;
 
-use winapi::shared::windef::HDC;
-
 use winapi::um::wingdi::{
     StretchDIBits, BITMAPINFO, BITMAPINFOHEADER, BI_RGB, DIB_RGB_COLORS, RGBQUAD, SRCCOPY,
 };
@@ -16,16 +14,14 @@ use kernel32::{GetModuleHandleW, VirtualAlloc, VirtualFree};
 use std::mem::{size_of, zeroed};
 use std::ptr::null_mut;
 use winapi::shared::minwindef::{HINSTANCE, LPARAM, LRESULT, UINT, WPARAM};
-use winapi::shared::windef::{HWND, RECT};
+use winapi::shared::windef::{HDC, HWND, RECT};
 
 use winapi::um::winuser::{
     BeginPaint, CreateWindowExW, DefWindowProcW, DispatchMessageW, EndPaint, GetClientRect,
     GetMessageW, RegisterClassW, TranslateMessage, CS_HREDRAW, CS_OWNDC, CS_VREDRAW, CW_USEDEFAULT,
-    MSG, PAINTSTRUCT, WNDCLASSW, WS_OVERLAPPEDWINDOW, WS_VISIBLE,
+    MSG, PAINTSTRUCT, WM_ACTIVATEAPP, WM_CLOSE, WM_DESTROY, WM_PAINT, WM_SIZE, WNDCLASSW,
+    WS_OVERLAPPEDWINDOW, WS_VISIBLE,
 };
-
-// TODO: Figure out why removing this line makes the window invisible
-use winapi::um::winuser::*;
 
 static mut RUNNING: bool = true;
 
@@ -83,7 +79,7 @@ fn win32_resize_dibsection(width: i32, height: i32) {
         BITMAPINFO.bmiHeader.biWidth = BITMAP_WIDTH;
         BITMAPINFO.bmiHeader.biHeight = -BITMAP_HEIGHT;
         BITMAPINFO.bmiHeader.biPlanes = 1;
-        BITMAPINFO.bmiHeader.biBitCount = 3;
+        BITMAPINFO.bmiHeader.biBitCount = 32;
         BITMAPINFO.bmiHeader.biCompression = BI_RGB;
     }
     let bytes_per_pixel = 4;
@@ -104,13 +100,13 @@ fn win32_resize_dibsection(width: i32, height: i32) {
                 *pixel = 255;
                 pixel = pixel.offset(1);
 
-                *pixel = 255;
+                *pixel = 0;
                 pixel = pixel.offset(1);
                 //println!("running {:?}", *pixel);
-                *pixel = 255;
+                *pixel = 0;
                 pixel = pixel.offset(1);
 
-                *pixel = 255;
+                *pixel = 0;
                 pixel = pixel.offset(1);
             }
             row = row.offset(pitch.try_into().unwrap());
@@ -147,7 +143,7 @@ fn win32_update_window(
             0,
             window_width,
             window_height,
-            std::ptr::null(),
+            BITMAPMEMORY as *const _ as *const _,
             &BITMAPINFO,
             DIB_RGB_COLORS,
             SRCCOPY,
