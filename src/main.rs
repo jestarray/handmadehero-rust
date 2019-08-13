@@ -13,6 +13,7 @@ use winapi::ctypes::c_void;
 use winapi::um::libloaderapi::GetModuleHandleW;
 use winapi::um::winuser::MessageBoxA;
 use winapi::um::winuser::ReleaseDC;
+use winapi::um::xinput::XInputGetState;
 
 use winapi::um::memoryapi::VirtualAlloc;
 use winapi::um::memoryapi::VirtualFree;
@@ -34,8 +35,9 @@ use winapi::{
         winuser::{
             BeginPaint, CreateWindowExW, DefWindowProcW, DispatchMessageW, EndPaint, GetClientRect,
             RegisterClassW, TranslateMessage, CS_HREDRAW, CS_VREDRAW, CW_USEDEFAULT, MSG,
-            PAINTSTRUCT, WM_ACTIVATEAPP, WM_CLOSE, WM_DESTROY, WM_PAINT, WM_SIZE, WNDCLASSW,
-            WS_OVERLAPPEDWINDOW, WS_VISIBLE,
+            PAINTSTRUCT, VK_DOWN, VK_ESCAPE, VK_LEFT, VK_RIGHT, VK_SPACE, VK_UP, WM_ACTIVATEAPP,
+            WM_CLOSE, WM_DESTROY, WM_KEYDOWN, WM_KEYUP, WM_PAINT, WM_SIZE, WM_SYSKEYDOWN,
+            WM_SYSKEYUP, WNDCLASSW, WS_OVERLAPPEDWINDOW, WS_VISIBLE,
         },
     },
 };
@@ -188,6 +190,34 @@ unsafe extern "system" fn wnd_proc(
             RUNNING = false;
             0
         }
+        WM_SYSKEYDOWN | WM_SYSKEYUP | WM_KEYDOWN | WM_KEYUP => {
+            let vk_code = wparam as i32;
+            let was_down: bool = (lparam & (1 << 30)) != 0;
+            let is_down: bool = (lparam & (1 << 31)) == 0;
+            if was_down != is_down {
+                match vk_code as u8 as char {
+                    'W' => {
+                        //87 in deci
+                        println!("working W");
+                    }
+                    'A' => {}
+                    'S' => {}
+                    'D' => {}
+                    'Q' => {}
+                    'E' => {}
+                    _ => match vk_code {
+                        VK_UP => {}
+                        VK_LEFT => {}
+                        VK_DOWN => {}
+                        VK_RIGHT => {}
+                        VK_ESCAPE => {}
+                        VK_SPACE => {}
+                        _ => {}
+                    },
+                }
+            };
+            0
+        }
         WM_PAINT => {
             let mut paint: PAINTSTRUCT = zeroed::<PAINTSTRUCT>();
             let device_context = BeginPaint(window, &mut paint);
@@ -220,6 +250,7 @@ fn win32_string(value: &str) -> Vec<u16> {
     //use this when passing strings to windows
     OsStr::new(value).encode_wide().chain(once(0)).collect()
 }
+
 fn create_window() {
     let name = win32_string("HandmadeheroWindowClass");
     let title = win32_string("HandmadeHero");
@@ -280,6 +311,37 @@ fn create_window() {
                             TranslateMessage(&message);
                             DispatchMessageW(&message);
                         }
+                        for controller_index in 0..winapi::um::xinput::XUSER_MAX_COUNT {
+                            let mut controller_state: winapi::um::xinput::XINPUT_STATE = zeroed();
+                            if XInputGetState(controller_index, &mut controller_state)
+                                == winapi::shared::winerror::ERROR_SUCCESS
+                            {
+                                let pad: winapi::um::xinput::XINPUT_GAMEPAD =
+                                    controller_state.Gamepad;
+
+                                let up = pad.wButtons & winapi::um::xinput::XINPUT_GAMEPAD_DPAD_UP;
+                                let down =
+                                    pad.wButtons & winapi::um::xinput::XINPUT_GAMEPAD_DPAD_DOWN;
+                                let left =
+                                    pad.wButtons & winapi::um::xinput::XINPUT_GAMEPAD_DPAD_LEFT;
+                                let right =
+                                    pad.wButtons & winapi::um::xinput::XINPUT_GAMEPAD_DPAD_RIGHT;
+
+                                let back = pad.wButtons & winapi::um::xinput::XINPUT_GAMEPAD_BACK;
+                                let left_shoulder =
+                                    pad.wButtons & winapi::um::xinput::XINPUT_GAMEPAD_LEFT_SHOULDER;
+                                let right_shoulder = pad.wButtons
+                                    & winapi::um::xinput::XINPUT_GAMEPAD_RIGHT_SHOULDER;
+                                let a_button = pad.wButtons & winapi::um::xinput::XINPUT_GAMEPAD_A;
+                                let b_button = pad.wButtons & winapi::um::xinput::XINPUT_GAMEPAD_B;
+                                let x_button = pad.wButtons & winapi::um::xinput::XINPUT_GAMEPAD_X;
+                                let y_button = pad.wButtons & winapi::um::xinput::XINPUT_GAMEPAD_Y;
+
+                                let stick_x = pad.sThumbLX;
+                                let stick_y = pad.sThumbLY;
+                            }
+                        }
+
                         render_weird_gradient(&GLOBAL_BACKBUFFER, offset_x, offset_y);
 
                         let device_context = GetDC(window);
