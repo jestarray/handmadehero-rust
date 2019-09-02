@@ -299,6 +299,24 @@ fn win32_string(value: &str) -> Vec<u16> {
     OsStr::new(value).encode_wide().chain(once(0)).collect()
 }
 
+fn win32_process_xinput_digital_button(
+    xinput_button_state: DWORD,
+    old_state: &GameButtonState,
+    button_bit: DWORD,
+    mut new_state: &mut GameButtonState,
+) {
+    /*
+    new_state.ended_down = (xinput_button_state & button_bit) == button_bit;
+    new_state.half_transition_count = (old_state.ended_down != new_state.ended_down) ? : 0;
+     */
+    new_state.ended_down = ((xinput_button_state & button_bit) == button_bit) as i32;
+    new_state.half_transition_count = if old_state.ended_down != new_state.ended_down {
+        1
+    } else {
+        0
+    };
+}
+
 pub fn create_window() {
     let name = win32_string("HandmadeheroWindowClass");
     let title = win32_string("HandmadeHero");
@@ -360,10 +378,14 @@ pub fn create_window() {
                     let mut last_counter = zeroed::<LARGE_INTEGER>();
                     QueryPerformanceCounter(&mut last_counter);
 
+                    let mut old_input = GameInput::default();
+                    let mut new_input = GameInput::default();
+
                     let mut last_cycle_count = _rdtsc();
 
                     while RUNNING {
                         let mut message = zeroed::<MSG>();
+
                         while PeekMessageW(&mut message, zeroed(), 0, 0, PM_REMOVE) != 0 {
                             if message.message == WM_QUIT {
                                 RUNNING = false;
@@ -374,11 +396,17 @@ pub fn create_window() {
                         for controller_index in 0..winapi::um::xinput::XUSER_MAX_COUNT {
                             let mut controller_state: winapi::um::xinput::XINPUT_STATE = zeroed();
 
-                            if XInputGetState(controller_index, &mut controller_state) //slow, will get removed in the future
+                            let old_controller =
+                                &mut old_input.controllers[controller_index as usize];
+
+                            let mut new_controller: &mut GameControllerInput =
+                                &mut new_input.controllers[controller_index as usize];
+
+                            //slow, will get removed in the future
+                            if XInputGetState(controller_index, &mut controller_state)
                                 == winapi::shared::winerror::ERROR_SUCCESS
                             {
-                                let pad: winapi::um::xinput::XINPUT_GAMEPAD =
-                                    controller_state.Gamepad;
+                                let pad = &controller_state.Gamepad;
 
                                 let up = pad.wButtons & winapi::um::xinput::XINPUT_GAMEPAD_DPAD_UP;
                                 let down =
@@ -388,18 +416,68 @@ pub fn create_window() {
                                 let right =
                                     pad.wButtons & winapi::um::xinput::XINPUT_GAMEPAD_DPAD_RIGHT;
 
-                                let back = pad.wButtons & winapi::um::xinput::XINPUT_GAMEPAD_BACK;
-                                let left_shoulder =
-                                    pad.wButtons & winapi::um::xinput::XINPUT_GAMEPAD_LEFT_SHOULDER;
-                                let right_shoulder = pad.wButtons
-                                    & winapi::um::xinput::XINPUT_GAMEPAD_RIGHT_SHOULDER;
-                                let a_button = pad.wButtons & winapi::um::xinput::XINPUT_GAMEPAD_A;
-                                let b_button = pad.wButtons & winapi::um::xinput::XINPUT_GAMEPAD_B;
-                                let x_button = pad.wButtons & winapi::um::xinput::XINPUT_GAMEPAD_X;
-                                let y_button = pad.wButtons & winapi::um::xinput::XINPUT_GAMEPAD_Y;
+                                let x = if pad.sThumbLX < 0 {
+                                    pad.sThumbLX as f32 / 32768.0 as f32
+                                } else {
+                                    pad.sThumbLX as f32 / 32767.0 as f32
+                                };
+
+                                new_controller.end_x = x;
+                                new_controller.max_x = x;
+                                new_controller.min_x = x;
+
+                                let y = if pad.sThumbLY < 0 {
+                                    pad.sThumbLY as f32 / 32768.0 as f32
+                                } else {
+                                    pad.sThumbLY as f32 / 32767.0 as f32
+                                };
+                                new_controller.end_y = y;
+                                new_controller.max_y = y;
+                                new_controller.min_y = y;
 
                                 let stick_x = pad.sThumbLX;
                                 let stick_y = pad.sThumbLY;
+
+                                win32_process_xinput_digital_button(
+                                    pad.wButtons.into(),
+                                    &old_controller.down(),
+                                    winapi::um::xinput::XINPUT_GAMEPAD_A.into(),
+                                    &mut new_controller.down(),
+                                );
+                                win32_process_xinput_digital_button(
+                                    pad.wButtons.into(),
+                                    &old_controller.right(),
+                                    winapi::um::xinput::XINPUT_GAMEPAD_B.into(),
+                                    &mut new_controller.right(),
+                                );
+
+                                win32_process_xinput_digital_button(
+                                    pad.wButtons.into(),
+                                    &old_controller.left(),
+                                    winapi::um::xinput::XINPUT_GAMEPAD_X.into(),
+                                    &mut new_controller.left(),
+                                );
+
+                                win32_process_xinput_digital_button(
+                                    pad.wButtons.into(),
+                                    &old_controller.up(),
+                                    winapi::um::xinput::XINPUT_GAMEPAD_Y.into(),
+                                    &mut new_controller.up(),
+                                );
+
+                                win32_process_xinput_digital_button(
+                                    pad.wButtons.into(),
+                                    &old_controller.left_shoulder(),
+                                    winapi::um::xinput::XINPUT_GAMEPAD_LEFT_SHOULDER.into(),
+                                    &mut new_controller.left_shoulder(),
+                                );
+
+                                win32_process_xinput_digital_button(
+                                    pad.wButtons.into(),
+                                    &old_controller.right_shoulder(),
+                                    winapi::um::xinput::XINPUT_GAMEPAD_RIGHT_SHOULDER.into(),
+                                    &mut new_controller.right_shoulder(),
+                                );
                             }
                         }
                         let mut buffer = GameOffScreenBuffer {
@@ -408,7 +486,7 @@ pub fn create_window() {
                             width: GLOBAL_BACKBUFFER.width,
                             pitch: GLOBAL_BACKBUFFER.pitch,
                         };
-                        game_update_and_render(&mut buffer, offset_x, offset_y);
+                        game_update_and_render(&mut new_input, &mut buffer);
 
                         let device_context = GetDC(window);
                         let dimension = win32_get_window_dimension(window);
@@ -444,6 +522,10 @@ pub fn create_window() {
                         ); */
                         last_counter = end_counter;
                         last_cycle_count = end_cyle_counter;
+
+                        let temp = new_input;
+                        new_input = old_input;
+                        old_input = temp;
                     }
                 }
             }

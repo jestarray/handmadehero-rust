@@ -1,6 +1,23 @@
 //comment out for println! to work
 //#![windows_subsystem = "windows"]
+/*
 
+type alies
+typedef int8_t int8;
+typedef int16_t int16;
+typedef int32_t int32;
+typedef int64_t int64;
+typedef int32 bool32;
+
+typedef uint8_t uint8;
+typedef uint16_t uint16;
+typedef uint32_t uint32;
+typedef uint64_t uint64;
+
+typedef float real32;
+typedef double real64;
+
+*/
 mod win32_handmade;
 
 use crate::win32_handmade::*;
@@ -11,12 +28,74 @@ pub struct GameOffScreenBuffer {
     height: i32,
     pitch: i32,
 }
+
+#[derive(Default)]
+pub struct GameInput {
+    controllers: [GameControllerInput; 4],
+}
+#[derive(Default)]
+struct GameControllerInput {
+    is_analog: i32,
+
+    is_down: i32,
+
+    start_x: f32,
+    start_y: f32,
+    min_x: f32,
+    min_y: f32,
+    max_x: f32,
+    max_y: f32,
+    end_x: f32,
+    end_y: f32,
+
+    buttons: [GameButtonState; 6],
+}
+
+impl GameControllerInput {
+    fn up(&mut self) -> &mut GameButtonState {
+        &mut self.buttons[0]
+    }
+    fn down(&mut self) -> &mut GameButtonState {
+        &mut self.buttons[1]
+    }
+    fn left(&mut self) -> &mut GameButtonState {
+        &mut self.buttons[2]
+    }
+    fn right(&mut self) -> &mut GameButtonState {
+        &mut self.buttons[3]
+    }
+    fn left_shoulder(&mut self) -> &mut GameButtonState {
+        &mut self.buttons[4]
+    }
+    fn right_shoulder(&mut self) -> &mut GameButtonState {
+        &mut self.buttons[5]
+    }
+}
+
+#[derive(Default)]
+struct GameButtonState {
+    half_transition_count: i32,
+    ended_down: i32,
+}
+
 fn main() {
     create_window();
 }
 
-pub fn game_update_and_render(mut buffer: &mut GameOffScreenBuffer, offset_x: i32, offset_y: i32) {
-    unsafe { render_weird_gradient(&mut buffer, 0, 0) }
+pub fn game_update_and_render(input: &mut GameInput, mut buffer: &mut GameOffScreenBuffer) {
+    unsafe {
+        static mut blue_offset: i32 = 0;
+        static mut green_offset: i32 = 0;
+        let input_0 = &mut input.controllers[0];
+        if input_0.is_analog != 0 {
+            blue_offset += (4.0 * input_0.end_y) as i32;
+        }
+
+        if input_0.down().ended_down != 0 {
+            green_offset += 1;
+        }
+        render_weird_gradient(&mut buffer, blue_offset, green_offset)
+    }
 }
 
 unsafe fn render_weird_gradient(
