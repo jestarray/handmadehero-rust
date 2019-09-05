@@ -14,6 +14,7 @@ use std::{
 };
 use winapi::ctypes::c_void;
 use winapi::shared::minwindef::DWORD;
+use winapi::shared::minwindef::LPVOID;
 use winapi::shared::mmreg::WAVEFORMATEX;
 use winapi::shared::mmreg::WAVE_FORMAT_PCM;
 use winapi::shared::winerror::SUCCEEDED;
@@ -22,21 +23,29 @@ use winapi::um::dsound::DSBCAPS_PRIMARYBUFFER;
 use winapi::um::dsound::DSBUFFERDESC;
 use winapi::um::dsound::LPDIRECTSOUND;
 use winapi::um::dsound::LPDIRECTSOUNDBUFFER;
+use winapi::um::fileapi::CreateFileA;
+use winapi::um::fileapi::CreateFileW;
+use winapi::um::fileapi::GetFileSizeEx;
+use winapi::um::fileapi::OPEN_EXISTING;
+use winapi::um::handleapi::CloseHandle;
 use winapi::um::libloaderapi::GetModuleHandleW;
+use winapi::um::winnt::FILE_SHARE_READ;
+use winapi::um::winnt::GENERIC_READ;
 use winapi::um::winnt::LARGE_INTEGER;
 use winapi::um::winuser::MessageBoxA;
 use winapi::um::winuser::ReleaseDC;
 use winapi::um::xinput::XInputGetState;
 use winapi::um::xinput::XUSER_MAX_COUNT;
 
-
 use winapi::um::dsound::IDirectSound;
 use winapi::um::dsound::DSSCL_PRIORITY;
+use winapi::um::fileapi::ReadFile;
+use winapi::um::handleapi::INVALID_HANDLE_VALUE;
 use winapi::um::memoryapi::VirtualAlloc;
 use winapi::um::memoryapi::VirtualFree;
 use winapi::um::profileapi::QueryPerformanceFrequency;
-use winapi::um::winnt::PF_RDTSC_INSTRUCTION_AVAILABLE;
 use winapi::um::winnt::MEM_RESERVE;
+use winapi::um::winnt::PF_RDTSC_INSTRUCTION_AVAILABLE;
 
 use winapi::um::profileapi::QueryPerformanceCounter;
 use winapi::um::winuser::GetDC;
@@ -65,6 +74,61 @@ use winapi::{
 
 static mut RUNNING: bool = true;
 
+pub unsafe fn debug_platform_read_entire_file(file_name: *const i8) -> *mut c_void {
+    // char *file_name in C++, but createfile takes a *const i8
+    let mut result = null_mut();
+    let file_handle = CreateFileA(
+        file_name,
+        GENERIC_READ,
+        FILE_SHARE_READ,
+        0 as *mut winapi::um::minwinbase::SECURITY_ATTRIBUTES,
+        OPEN_EXISTING,
+        0,
+        null_mut(),
+    );
+
+    println!("THE NAME {:#?} ", file_name);
+
+    println!("name: {:#?}", *file_name.offset(1)); //second letter of filename in ascii
+
+    println!("THE INVALID HANDLE {:#?} ", file_handle); // if 0xffffff, failed to read file
+
+    if file_handle != INVALID_HANDLE_VALUE {
+        let mut file_size = zeroed::<LARGE_INTEGER>();
+        if GetFileSizeEx(file_handle, &mut file_size) != 0 {
+            result = VirtualAlloc(
+                null_mut(),
+                *file_size.QuadPart() as usize,
+                MEM_RESERVE | MEM_COMMIT,
+                PAGE_READWRITE,
+            );
+            if result != null_mut() {
+                let mut bytes_read = zeroed::<DWORD>();
+                if ReadFile(
+                    file_handle,
+                    result,
+                    *file_size.QuadPart() as u32,
+                    &mut bytes_read,
+                    null_mut(),
+                ) != 0
+                {
+                    //file read successfully
+                } else {
+                    debug_platform_free_file_memory(result);
+                }
+            }
+        }
+
+        CloseHandle(file_handle);
+    }
+    return result;
+}
+pub unsafe fn debug_platform_free_file_memory(memory: *mut c_void) {
+    if memory != null_mut() {
+        VirtualFree(memory, 0, MEM_RELEASE);
+    }
+}
+fn debug_platform_write_entire_file(file_name: &str, memory: i32) {}
 struct Win32OffScreenBuffer {
     memory: *mut c_void,
     width: i32,
@@ -296,7 +360,7 @@ unsafe extern "system" fn wnd_proc(
     }
 }
 
-fn win32_string(value: &str) -> Vec<u16> {
+pub fn win32_string(value: &str) -> Vec<u16> {
     //use this when passing strings to windows
     OsStr::new(value).encode_wide().chain(once(0)).collect()
 }
@@ -379,12 +443,12 @@ pub fn create_window() {
                     let mut game_memory = GameMemory {
                         is_initalized: 0,
                         permanent_storage_size: 64 * 1024 * 1024, //64mb ,
-                        transient_storage_size: 4 * 1024 * 1024 * 1024,
+                        transient_storage_size: 4 * 1024 * 1024 * 1024, //4gb
                         transient_storage: null_mut() as *mut std::ffi::c_void,
                         permanent_storage: null_mut() as *mut std::ffi::c_void,
                     };
 
-                    game_memory.permanent_storage =  VirtualAlloc(
+                    game_memory.permanent_storage = VirtualAlloc(
                         null_mut(),
                         game_memory.permanent_storage_size as usize,
                         MEM_RESERVE | MEM_COMMIT,

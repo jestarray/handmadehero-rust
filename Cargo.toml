@@ -9,4 +9,4 @@ edition = "2018"
 [dependencies]
 
 [target.'cfg(windows)'.dependencies]
-winapi = { version = "0.3.8", features = ["winuser", "memoryapi", "libloaderapi", "xinput", "winerror", "profileapi", "dsound"] }
+winapi = { version = "0.3.8", features = ["winuser", "memoryapi", "libloaderapi", "xinput", "winerror", "profileapi", "dsound", "fileapi", "handleapi"] }

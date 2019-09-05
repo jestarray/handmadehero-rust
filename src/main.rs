@@ -22,6 +22,7 @@ mod win32_handmade;
 
 use crate::win32_handmade::*;
 use std::ffi::c_void;
+use std::ptr::null_mut;
 pub struct GameOffScreenBuffer {
     memory: *mut c_void,
     width: i32,
@@ -31,6 +32,7 @@ pub struct GameOffScreenBuffer {
 
 #[derive(Default)]
 pub struct GameInput {
+    //TODO(jest): insert clock values
     controllers: [GameControllerInput; 4],
 }
 #[derive(Default)]
@@ -90,6 +92,7 @@ pub struct GameMemory {
     transient_storage: *mut c_void,
     permanent_storage: *mut c_void,
 }
+
 fn main() {
     create_window();
 }
@@ -99,14 +102,19 @@ pub fn game_update_and_render(
     input: &mut GameInput,
     mut buffer: &mut GameOffScreenBuffer,
 ) {
-     unsafe {
-        //let game_state = memory.permanent_storage;
+    unsafe {
         let mut game_state = memory.permanent_storage as *mut GameState;
         if memory.is_initalized == 0 {
             (*game_state).tonehz = 256;
             (*game_state).green_offset = 0;
             (*game_state).blue_offset = 0;
             memory.is_initalized = 1;
+            let file_name = "D:\\handmadehero-rust\\src\\main.rs";
+            let bitmap_memory = debug_platform_read_entire_file(file_name.as_ptr() as *const i8);
+
+            if bitmap_memory != null_mut::<winapi::ctypes::c_void>() {
+                debug_platform_free_file_memory(bitmap_memory);
+            }
         }
         let input_0 = &mut input.controllers[0];
         if input_0.is_analog != 0 {
@@ -121,7 +129,7 @@ pub fn game_update_and_render(
             (*game_state).blue_offset,
             (*game_state).green_offset,
         )
-    } 
+    }
 }
 
 unsafe fn render_weird_gradient(
