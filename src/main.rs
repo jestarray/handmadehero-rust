@@ -93,6 +93,11 @@ pub struct GameMemory {
     permanent_storage: *mut c_void,
 }
 
+pub struct DebugReadFile {
+    content_size: u32,
+    contents: *mut c_void,
+}
+
 fn main() {
     create_window();
 }
@@ -109,11 +114,11 @@ pub fn game_update_and_render(
             (*game_state).green_offset = 0;
             (*game_state).blue_offset = 0;
             memory.is_initalized = 1;
-            let file_name = "D:\\handmadehero-rust\\src\\main.rs";
-            let bitmap_memory = debug_platform_read_entire_file(file_name.as_ptr() as *const i8);
+            let file = debug_platform_read_entire_file("D:\\handmadehero-rust\\src\\main.rs");
 
-            if bitmap_memory != null_mut::<winapi::ctypes::c_void>() {
-                debug_platform_free_file_memory(bitmap_memory);
+            if file.contents != null_mut() {
+                debug_platform_write_entire_file("HH_TEST.out", file.content_size, file.contents);
+                debug_platform_free_file_memory(file.contents);
             }
         }
         let input_0 = &mut input.controllers[0];

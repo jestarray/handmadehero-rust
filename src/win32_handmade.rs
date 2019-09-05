@@ -1,9 +1,9 @@
 //comment out for println! to work
 //#![windows_subsystem = "windows"]
-
 use crate::game_update_and_render;
 use crate::*; //import from main.rs, should move this
 use core::arch::x86_64::_rdtsc;
+use std::ffi::CString;
 use std::{
     convert::TryInto,
     ffi::OsStr,
@@ -14,7 +14,6 @@ use std::{
 };
 use winapi::ctypes::c_void;
 use winapi::shared::minwindef::DWORD;
-use winapi::shared::minwindef::LPVOID;
 use winapi::shared::mmreg::WAVEFORMATEX;
 use winapi::shared::mmreg::WAVE_FORMAT_PCM;
 use winapi::shared::winerror::SUCCEEDED;
@@ -24,13 +23,15 @@ use winapi::um::dsound::DSBUFFERDESC;
 use winapi::um::dsound::LPDIRECTSOUND;
 use winapi::um::dsound::LPDIRECTSOUNDBUFFER;
 use winapi::um::fileapi::CreateFileA;
-use winapi::um::fileapi::CreateFileW;
 use winapi::um::fileapi::GetFileSizeEx;
+use winapi::um::fileapi::WriteFile;
+use winapi::um::fileapi::CREATE_ALWAYS;
 use winapi::um::fileapi::OPEN_EXISTING;
 use winapi::um::handleapi::CloseHandle;
 use winapi::um::libloaderapi::GetModuleHandleW;
 use winapi::um::winnt::FILE_SHARE_READ;
 use winapi::um::winnt::GENERIC_READ;
+use winapi::um::winnt::GENERIC_WRITE;
 use winapi::um::winnt::LARGE_INTEGER;
 use winapi::um::winuser::MessageBoxA;
 use winapi::um::winuser::ReleaseDC;
@@ -74,11 +75,14 @@ use winapi::{
 
 static mut RUNNING: bool = true;
 
-pub unsafe fn debug_platform_read_entire_file(file_name: *const i8) -> *mut c_void {
-    // char *file_name in C++, but createfile takes a *const i8
-    let mut result = null_mut();
+pub unsafe fn debug_platform_read_entire_file(file_name: &str) -> DebugReadFile {
+    let file_name = CString::new(file_name).unwrap();
+    let mut result = DebugReadFile {
+        content_size: 0,
+        contents: null_mut(),
+    };
     let file_handle = CreateFileA(
-        file_name,
+        file_name.as_ptr() as *const i8,
         GENERIC_READ,
         FILE_SHARE_READ,
         0 as *mut winapi::um::minwinbase::SECURITY_ATTRIBUTES,
@@ -87,34 +91,33 @@ pub unsafe fn debug_platform_read_entire_file(file_name: *const i8) -> *mut c_vo
         null_mut(),
     );
 
-    println!("THE NAME {:#?} ", file_name);
-
-    println!("name: {:#?}", *file_name.offset(1)); //second letter of filename in ascii
-
-    println!("THE INVALID HANDLE {:#?} ", file_handle); // if 0xffffff, failed to read file
+    println!("THE FILE H VALUE : {:#?}", file_handle);
 
     if file_handle != INVALID_HANDLE_VALUE {
         let mut file_size = zeroed::<LARGE_INTEGER>();
         if GetFileSizeEx(file_handle, &mut file_size) != 0 {
-            result = VirtualAlloc(
+            result.contents = VirtualAlloc(
                 null_mut(),
                 *file_size.QuadPart() as usize,
                 MEM_RESERVE | MEM_COMMIT,
                 PAGE_READWRITE,
-            );
-            if result != null_mut() {
+            ) as *mut std::ffi::c_void;
+            if result.contents != null_mut() {
                 let mut bytes_read = zeroed::<DWORD>();
                 if ReadFile(
                     file_handle,
-                    result,
+                    result.contents as *mut winapi::ctypes::c_void,
                     *file_size.QuadPart() as u32,
                     &mut bytes_read,
                     null_mut(),
                 ) != 0
                 {
-                    //file read successfully
+                    result.content_size = *file_size.QuadPart() as u32;
+                //file read successfully
                 } else {
-                    debug_platform_free_file_memory(result);
+                    //TODO logging
+                    debug_platform_free_file_memory(result.contents);
+                    result.contents = null_mut();
                 }
             }
         }
@@ -123,12 +126,50 @@ pub unsafe fn debug_platform_read_entire_file(file_name: *const i8) -> *mut c_vo
     }
     return result;
 }
-pub unsafe fn debug_platform_free_file_memory(memory: *mut c_void) {
+pub unsafe fn debug_platform_free_file_memory(memory: *mut std::ffi::c_void) {
     if memory != null_mut() {
-        VirtualFree(memory, 0, MEM_RELEASE);
+        VirtualFree(memory as *mut winapi::ctypes::c_void, 0, MEM_RELEASE);
     }
 }
-fn debug_platform_write_entire_file(file_name: &str, memory: i32) {}
+pub unsafe fn debug_platform_write_entire_file(
+    file_name: &str,
+    memory_size: u32,
+    memory: *mut std::ffi::c_void,
+) -> bool {
+    let file_name = CString::new(file_name).unwrap();
+    let mut result = false;
+    let file_handle = CreateFileA(
+        file_name.as_ptr() as *const i8,
+        GENERIC_WRITE,
+        0,
+        0 as *mut winapi::um::minwinbase::SECURITY_ATTRIBUTES,
+        CREATE_ALWAYS,
+        0,
+        null_mut(),
+    );
+
+    if file_handle != INVALID_HANDLE_VALUE {
+        let mut bytes_written = zeroed::<DWORD>();
+        if WriteFile(
+            file_handle,
+            memory as *const winapi::ctypes::c_void,
+            memory_size,
+            &mut bytes_written,
+            null_mut(),
+        ) != 0
+        {
+            result = bytes_written == memory_size;
+        //file read successfully
+        } else {
+            //TODO logging
+        }
+
+        CloseHandle(file_handle);
+    } else {
+        //TODO logging
+    }
+    return result;
+}
 struct Win32OffScreenBuffer {
     memory: *mut c_void,
     width: i32,
@@ -386,7 +427,6 @@ fn win32_process_xinput_digital_button(
 pub fn create_window() {
     let name = win32_string("HandmadeheroWindowClass");
     let title = win32_string("HandmadeHero");
-
     unsafe { win32_resize_dibsection(&mut GLOBAL_BACKBUFFER, 1280, 720) };
     let instance = unsafe { GetModuleHandleW(name.as_ptr() as *const u16) as HINSTANCE };
 
