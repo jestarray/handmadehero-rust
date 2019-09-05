@@ -21,7 +21,7 @@ typedef double real64;
 mod win32_handmade;
 
 use crate::win32_handmade::*;
-use winapi::ctypes::c_void;
+use std::ffi::c_void;
 pub struct GameOffScreenBuffer {
     memory: *mut c_void,
     width: i32,
@@ -77,25 +77,51 @@ struct GameButtonState {
     half_transition_count: i32,
     ended_down: i32,
 }
-
+#[derive(Default)]
+pub struct GameState {
+    green_offset: i32,
+    blue_offset: i32,
+    tonehz: i32,
+}
+pub struct GameMemory {
+    is_initalized: i32,
+    permanent_storage_size: u64,
+    transient_storage_size: u64,
+    transient_storage: *mut c_void,
+    permanent_storage: *mut c_void,
+}
 fn main() {
     create_window();
 }
 
-pub fn game_update_and_render(input: &mut GameInput, mut buffer: &mut GameOffScreenBuffer) {
-    unsafe {
-        static mut blue_offset: i32 = 0;
-        static mut green_offset: i32 = 0;
+pub fn game_update_and_render(
+    memory: &mut GameMemory,
+    input: &mut GameInput,
+    mut buffer: &mut GameOffScreenBuffer,
+) {
+     unsafe {
+        //let game_state = memory.permanent_storage;
+        let mut game_state = memory.permanent_storage as *mut GameState;
+        if memory.is_initalized == 0 {
+            (*game_state).tonehz = 256;
+            (*game_state).green_offset = 0;
+            (*game_state).blue_offset = 0;
+            memory.is_initalized = 1;
+        }
         let input_0 = &mut input.controllers[0];
         if input_0.is_analog != 0 {
-            blue_offset += (4.0 * input_0.end_y) as i32;
+            (*game_state).blue_offset += (4.0 * input_0.end_y) as i32;
         }
 
         if input_0.down().ended_down != 0 {
-            green_offset += 1;
+            (*game_state).green_offset += 1;
         }
-        render_weird_gradient(&mut buffer, blue_offset, green_offset)
-    }
+        render_weird_gradient(
+            &mut buffer,
+            (*game_state).blue_offset,
+            (*game_state).green_offset,
+        )
+    } 
 }
 
 unsafe fn render_weird_gradient(

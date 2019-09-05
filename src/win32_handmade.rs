@@ -27,6 +27,7 @@ use winapi::um::winnt::LARGE_INTEGER;
 use winapi::um::winuser::MessageBoxA;
 use winapi::um::winuser::ReleaseDC;
 use winapi::um::xinput::XInputGetState;
+use winapi::um::xinput::XUSER_MAX_COUNT;
 
 use winapi::um::dsound::IDirectSound;
 use winapi::um::dsound::DSSCL_PRIORITY;
@@ -171,7 +172,6 @@ fn win32_resize_dibsection(buffer: &mut Win32OffScreenBuffer, width: i32, height
     buffer.info.bmiHeader.biBitCount = 32;
     buffer.info.bmiHeader.biCompression = BI_RGB;
     buffer.pitch = buffer.width * buffer.bytes_per_pixel;
-
     let bitmapmemorysize = (buffer.width * buffer.height) * buffer.bytes_per_pixel;
     buffer.memory = unsafe {
         VirtualAlloc(
@@ -181,6 +181,7 @@ fn win32_resize_dibsection(buffer: &mut Win32OffScreenBuffer, width: i32, height
             PAGE_READWRITE,
         )
     };
+    println!("THE BUFFER.MEMORY IS @ {:#?}", buffer.memory);
     // game_update_and_render();
     //unsafe { render_weird_gradient(&buffer, 1280, 0) }
 }
@@ -374,6 +375,27 @@ pub fn create_window() {
 
                     // TODO
                     // win32_init_dsound(window);
+                    let mut game_memory = GameMemory {
+                        is_initalized: 0,
+                        permanent_storage_size: 64 * 1024 * 1024, //64mb ,
+                        transient_storage_size: 4 * 1024 * 1024 * 1024,
+                        transient_storage: null_mut() as *mut std::ffi::c_void,
+                        permanent_storage: null_mut() as *mut std::ffi::c_void,
+                    };
+
+                    game_memory.permanent_storage =  VirtualAlloc(
+                        null_mut(),
+                        game_memory.permanent_storage_size as usize,
+                        MEM_RELEASE | MEM_COMMIT,
+                        PAGE_READWRITE,
+                    ) as *mut std::ffi::c_void;
+
+                    game_memory.transient_storage = VirtualAlloc(
+                        null_mut(),
+                        game_memory.transient_storage_size as usize,
+                        MEM_RELEASE | MEM_COMMIT,
+                        PAGE_READWRITE,
+                    ) as *mut std::ffi::c_void;
 
                     let mut last_counter = zeroed::<LARGE_INTEGER>();
                     QueryPerformanceCounter(&mut last_counter);
@@ -382,6 +404,10 @@ pub fn create_window() {
                     let mut new_input = GameInput::default();
 
                     let mut last_cycle_count = _rdtsc();
+
+                    /*    if game_memory.permanent_storage as usize != 0 {
+
+                    } */
 
                     while RUNNING {
                         let mut message = zeroed::<MSG>();
@@ -393,7 +419,12 @@ pub fn create_window() {
                             TranslateMessage(&message);
                             DispatchMessageW(&message);
                         }
-                        for controller_index in 0..winapi::um::xinput::XUSER_MAX_COUNT {
+
+                        let mut max_controller_count = XUSER_MAX_COUNT;
+                        if max_controller_count > new_input.controllers.len() as u32 {
+                            max_controller_count = new_input.controllers.len() as u32;
+                        }
+                        for controller_index in 0..max_controller_count {
                             let mut controller_state: winapi::um::xinput::XINPUT_STATE = zeroed();
 
                             let old_controller =
@@ -480,13 +511,14 @@ pub fn create_window() {
                                 );
                             }
                         }
+
                         let mut buffer = GameOffScreenBuffer {
-                            memory: GLOBAL_BACKBUFFER.memory,
+                            memory: GLOBAL_BACKBUFFER.memory as *mut std::ffi::c_void,
                             height: GLOBAL_BACKBUFFER.height,
                             width: GLOBAL_BACKBUFFER.width,
                             pitch: GLOBAL_BACKBUFFER.pitch,
                         };
-                        game_update_and_render(&mut new_input, &mut buffer);
+                        game_update_and_render(&mut game_memory, &mut new_input, &mut buffer);
 
                         let device_context = GetDC(window);
                         let dimension = win32_get_window_dimension(window);
