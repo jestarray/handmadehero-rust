@@ -29,12 +29,14 @@ use winapi::um::winuser::ReleaseDC;
 use winapi::um::xinput::XInputGetState;
 use winapi::um::xinput::XUSER_MAX_COUNT;
 
+
 use winapi::um::dsound::IDirectSound;
 use winapi::um::dsound::DSSCL_PRIORITY;
 use winapi::um::memoryapi::VirtualAlloc;
 use winapi::um::memoryapi::VirtualFree;
 use winapi::um::profileapi::QueryPerformanceFrequency;
 use winapi::um::winnt::PF_RDTSC_INSTRUCTION_AVAILABLE;
+use winapi::um::winnt::MEM_RESERVE;
 
 use winapi::um::profileapi::QueryPerformanceCounter;
 use winapi::um::winuser::GetDC;
@@ -181,7 +183,6 @@ fn win32_resize_dibsection(buffer: &mut Win32OffScreenBuffer, width: i32, height
             PAGE_READWRITE,
         )
     };
-    println!("THE BUFFER.MEMORY IS @ {:#?}", buffer.memory);
     // game_update_and_render();
     //unsafe { render_weird_gradient(&buffer, 1280, 0) }
 }
@@ -386,14 +387,16 @@ pub fn create_window() {
                     game_memory.permanent_storage =  VirtualAlloc(
                         null_mut(),
                         game_memory.permanent_storage_size as usize,
-                        MEM_RELEASE | MEM_COMMIT,
+                        MEM_RESERVE | MEM_COMMIT,
                         PAGE_READWRITE,
                     ) as *mut std::ffi::c_void;
+
+                    //println!("the GAME PERM STORAGE IS {:#?}", game_memory.permanent_storage);
 
                     game_memory.transient_storage = VirtualAlloc(
                         null_mut(),
                         game_memory.transient_storage_size as usize,
-                        MEM_RELEASE | MEM_COMMIT,
+                        MEM_RESERVE | MEM_COMMIT,
                         PAGE_READWRITE,
                     ) as *mut std::ffi::c_void;
 
