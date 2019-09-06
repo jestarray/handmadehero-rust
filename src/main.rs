@@ -33,44 +33,53 @@ pub struct GameOffScreenBuffer {
 #[derive(Default)]
 pub struct GameInput {
     //TODO(jest): insert clock values
-    controllers: [GameControllerInput; 4],
+    controllers: [GameControllerInput; 5],
 }
 #[derive(Default)]
 struct GameControllerInput {
+    is_connected: i32,
     is_analog: i32,
 
-    is_down: i32,
+    stick_average_x: f32,
+    stick_average_y: f32,
 
-    start_x: f32,
-    start_y: f32,
-    min_x: f32,
-    min_y: f32,
-    max_x: f32,
-    max_y: f32,
-    end_x: f32,
-    end_y: f32,
-
-    buttons: [GameButtonState; 6],
+    buttons: [GameButtonState; 10],
+    start: GameButtonState,
+    back: GameButtonState,
 }
 
 impl GameControllerInput {
-    fn up(&mut self) -> &mut GameButtonState {
+    fn move_up(&mut self) -> &mut GameButtonState {
         &mut self.buttons[0]
     }
-    fn down(&mut self) -> &mut GameButtonState {
+    fn move_down(&mut self) -> &mut GameButtonState {
         &mut self.buttons[1]
     }
-    fn left(&mut self) -> &mut GameButtonState {
+    fn move_left(&mut self) -> &mut GameButtonState {
         &mut self.buttons[2]
     }
-    fn right(&mut self) -> &mut GameButtonState {
+    fn move_right(&mut self) -> &mut GameButtonState {
         &mut self.buttons[3]
     }
-    fn left_shoulder(&mut self) -> &mut GameButtonState {
+
+    fn action_up(&mut self) -> &mut GameButtonState {
         &mut self.buttons[4]
     }
-    fn right_shoulder(&mut self) -> &mut GameButtonState {
+    fn action_down(&mut self) -> &mut GameButtonState {
         &mut self.buttons[5]
+    }
+    fn action_left(&mut self) -> &mut GameButtonState {
+        &mut self.buttons[6]
+    }
+    fn action_right(&mut self) -> &mut GameButtonState {
+        &mut self.buttons[7]
+    }
+
+    fn left_shoulder(&mut self) -> &mut GameButtonState {
+        &mut self.buttons[8]
+    }
+    fn right_shoulder(&mut self) -> &mut GameButtonState {
+        &mut self.buttons[9]
     }
 }
 
@@ -121,13 +130,22 @@ pub fn game_update_and_render(
                 debug_platform_free_file_memory(file.contents);
             }
         } */
-        let input_0 = &mut input.controllers[0];
-        if input_0.is_analog != 0 {
-            (*game_state).blue_offset += (4.0 * input_0.end_y) as i32;
-        }
+        for controller_index in 0..input.controllers.len() {
+            let controller = &mut input.controllers[controller_index];
+            if controller.is_analog != 0 {
+                (*game_state).blue_offset += (4.0 * controller.stick_average_x) as i32;
+            } else {
+                if controller.move_left().ended_down != 0 {
+                    (*game_state).blue_offset -= 1;
+                }
+                if controller.move_right().ended_down != 0 {
+                    (*game_state).blue_offset += 1;
+                }
+            }
 
-        if input_0.down().ended_down != 0 {
-            (*game_state).green_offset += 1;
+            if controller.action_down().ended_down != 0 {
+                (*game_state).green_offset += 1;
+            }
         }
         render_weird_gradient(
             &mut buffer,

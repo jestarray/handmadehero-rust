@@ -16,6 +16,7 @@ use winapi::ctypes::c_void;
 use winapi::shared::minwindef::DWORD;
 use winapi::shared::mmreg::WAVEFORMATEX;
 use winapi::shared::mmreg::WAVE_FORMAT_PCM;
+use winapi::shared::ntdef::SHORT;
 use winapi::shared::winerror::SUCCEEDED;
 use winapi::um::dsound::DirectSoundCreate;
 use winapi::um::dsound::DSBCAPS_PRIMARYBUFFER;
@@ -53,6 +54,8 @@ use winapi::um::winuser::GetDC;
 use winapi::um::winuser::PeekMessageW;
 use winapi::um::winuser::PM_REMOVE;
 use winapi::um::winuser::WM_QUIT;
+use winapi::um::xinput::XINPUT_GAMEPAD_LEFT_THUMB_DEADZONE;
+use winapi::um::xinput::XINPUT_GAMEPAD_RIGHT_THUMB_DEADZONE;
 use winapi::{
     shared::{
         minwindef::{HINSTANCE, LPARAM, LRESULT, UINT, WPARAM},
@@ -321,6 +324,111 @@ fn win32_display_buffer_in_window(
     }
 }
 
+unsafe fn win32_process_pending_messages(keyboard_controller: &mut GameControllerInput) {
+    let mut message = zeroed::<MSG>();
+    while PeekMessageW(&mut message, zeroed(), 0, 0, PM_REMOVE) != 0 {
+        if message.message == WM_QUIT {
+            RUNNING = false;
+        }
+
+        match message.message {
+            WM_SYSKEYDOWN | WM_SYSKEYUP | WM_KEYDOWN | WM_KEYUP => {
+                let vk_code = message.wParam as i32;
+                let was_down: bool = (message.lParam & (1 << 30)) != 0;
+                let is_down: bool = (message.lParam & (1 << 31)) == 0;
+
+                let alt_is_down: bool = message.lParam & (1 << 29) != 0;
+                if was_down != is_down {
+                    match vk_code as u8 as char {
+                        'W' => {
+                            win32_process_keyboard_message(
+                                &mut keyboard_controller.move_up(),
+                                is_down,
+                            );
+                        }
+                        'A' => {
+                            win32_process_keyboard_message(
+                                &mut keyboard_controller.move_left(),
+                                is_down,
+                            );
+                        }
+                        'S' => {
+                            win32_process_keyboard_message(
+                                &mut keyboard_controller.move_down(),
+                                is_down,
+                            );
+                        }
+                        'D' => {
+                            win32_process_keyboard_message(
+                                &mut keyboard_controller.move_right(),
+                                is_down,
+                            );
+                        }
+                        'Q' => {
+                            win32_process_keyboard_message(
+                                &mut keyboard_controller.left_shoulder(),
+                                is_down,
+                            );
+                        }
+                        'E' => {
+                            win32_process_keyboard_message(
+                                &mut keyboard_controller.right_shoulder(),
+                                is_down,
+                            );
+                        }
+                        _ => {}
+                    }
+
+                    match vk_code {
+                        VK_DOWN => {
+                            win32_process_keyboard_message(
+                                &mut keyboard_controller.action_down(),
+                                is_down,
+                            );
+                        }
+                        VK_UP => {
+                            win32_process_keyboard_message(
+                                &mut keyboard_controller.action_up(),
+                                is_down,
+                            );
+                            println!("UP ARROW WORKING");
+                        }
+                        VK_LEFT => {
+                            win32_process_keyboard_message(
+                                &mut keyboard_controller.action_left(),
+                                is_down,
+                            );
+                        }
+                        VK_RIGHT => {
+                            win32_process_keyboard_message(
+                                &mut keyboard_controller.action_right(),
+                                is_down,
+                            );
+                        }
+                        VK_ESCAPE => {
+                            win32_process_keyboard_message(&mut keyboard_controller.start, is_down);
+                            RUNNING = false;
+                        }
+                        VK_SPACE => {
+                            win32_process_keyboard_message(&mut keyboard_controller.back, is_down);
+                        }
+                        VK_F4 => {
+                            if alt_is_down {
+                                RUNNING = false;
+                            }
+                        }
+                        _ => {}
+                    }
+                };
+            }
+            _ => {
+                TranslateMessage(&message);
+                DispatchMessageW(&message);
+            }
+        }
+    }
+}
+
 unsafe extern "system" fn wnd_proc(
     window: HWND,
     message: UINT,
@@ -390,6 +498,16 @@ fn win32_process_xinput_digital_button(
     };
 }
 
+fn win32_process_xinput_stickvalue(value: SHORT, dead_zone_threshold: SHORT) -> f32 {
+    let mut result = 0.0;
+    if value < -dead_zone_threshold {
+        result = value as f32 / 32768.0 as f32
+    } else if value > dead_zone_threshold {
+        result = value as f32 / 32767.0 as f32
+    };
+    result
+}
+
 pub fn create_window() {
     let name = win32_string("HandmadeheroWindowClass");
     let title = win32_string("HandmadeHero");
@@ -457,8 +575,6 @@ pub fn create_window() {
                         PAGE_READWRITE,
                     ) as *mut std::ffi::c_void;
 
-                    //println!("the GAME PERM STORAGE IS {:#?}", game_memory.permanent_storage);
-
                     game_memory.transient_storage = VirtualAlloc(
                         null_mut(),
                         game_memory.transient_storage_size as usize,
@@ -466,179 +582,153 @@ pub fn create_window() {
                         PAGE_READWRITE,
                     ) as *mut std::ffi::c_void;
 
-                    let mut last_counter = zeroed::<LARGE_INTEGER>();
-                    QueryPerformanceCounter(&mut last_counter);
-
-                    let mut old_input = GameInput::default();
-                    let mut new_input = GameInput::default();
-
-                    let mut last_cycle_count = _rdtsc();
-
                     if game_memory.permanent_storage != null_mut() {
+                        let mut old_input = GameInput::default();
+                        let mut new_input = GameInput::default();
+
+                        let mut last_counter = zeroed::<LARGE_INTEGER>();
+                        QueryPerformanceCounter(&mut last_counter);
+                        let mut last_cycle_count = _rdtsc();
                         while RUNNING {
-                            let mut message = zeroed::<MSG>();
-
-                            let keyboard_controller: &mut GameControllerInput =
+                            let old_keyboard_controller: &mut GameControllerInput =
+                                &mut old_input.controllers[0 as usize];
+                            let mut new_keyboard_controller: &mut GameControllerInput =
                                 &mut new_input.controllers[0 as usize];
-
-                            while PeekMessageW(&mut message, zeroed(), 0, 0, PM_REMOVE) != 0 {
-                                if message.message == WM_QUIT {
-                                    RUNNING = false;
-                                }
-
-                                match message.message {
-                                    WM_SYSKEYDOWN | WM_SYSKEYUP | WM_KEYDOWN | WM_KEYUP => {
-                                        let vk_code = message.wParam as i32;
-                                        let was_down: bool = (message.lParam & (1 << 30)) != 0;
-                                        let is_down: bool = (message.lParam & (1 << 31)) == 0;
-
-                                        let alt_is_down: bool = message.lParam & (1 << 29) != 0;
-                                        if was_down != is_down {
-                                            match vk_code as u8 as char {
-                                                'W' => {
-                                                    //87 in deci
-                                                    println!("working W");
-                                                }
-                                                'A' => {}
-                                                'S' => {}
-                                                'D' => {}
-                                                'Q' => {
-                                                    win32_process_keyboard_message(
-                                                        &mut keyboard_controller.left_shoulder(),
-                                                        is_down,
-                                                    );
-                                                }
-                                                'E' => {
-                                                    win32_process_keyboard_message(
-                                                        &mut keyboard_controller.right_shoulder(),
-                                                        is_down,
-                                                    );
-                                                }
-                                                _ => {}
-                                            }
-
-                                            match vk_code {
-                                                VK_DOWN => {
-                                                    win32_process_keyboard_message(
-                                                        &mut keyboard_controller.down(),
-                                                        is_down,
-                                                    );
-                                                }
-                                                VK_UP => {
-                                                    win32_process_keyboard_message(
-                                                        &mut keyboard_controller.up(),
-                                                        is_down,
-                                                    );
-                                                    println!("UP ARROW WORKING");
-                                                }
-                                                VK_LEFT => {
-                                                    win32_process_keyboard_message(
-                                                        &mut keyboard_controller.left(),
-                                                        is_down,
-                                                    );
-                                                }
-                                                VK_RIGHT => {
-                                                    win32_process_keyboard_message(
-                                                        &mut keyboard_controller.right(),
-                                                        is_down,
-                                                    );
-                                                }
-                                                VK_ESCAPE => {
-                                                    RUNNING = false;
-                                                }
-                                                VK_SPACE => {}
-                                                VK_F4 => {
-                                                    if alt_is_down {
-                                                        RUNNING = false;
-                                                    }
-                                                }
-                                                _ => {}
-                                            }
-                                        };
-                                    }
-                                    _ => {
-                                        TranslateMessage(&message);
-                                        DispatchMessageW(&message);
-                                    }
-                                }
+                            *new_keyboard_controller = GameControllerInput::default();
+                            (*new_keyboard_controller).is_connected = true as i32;
+                            for button_index in 0..new_keyboard_controller.buttons.len() {
+                                new_keyboard_controller.buttons[button_index].ended_down =
+                                    old_keyboard_controller.buttons[button_index].ended_down;
                             }
 
+                            win32_process_pending_messages(&mut new_keyboard_controller);
+
                             let mut max_controller_count = XUSER_MAX_COUNT;
-                            if max_controller_count > new_input.controllers.len() as u32 {
-                                max_controller_count = new_input.controllers.len() as u32;
+                            if max_controller_count > (new_input.controllers.len() - 1) as u32 {
+                                max_controller_count = (new_input.controllers.len() - 1) as u32;
                             }
                             for controller_index in 0..max_controller_count {
                                 let mut controller_state: winapi::um::xinput::XINPUT_STATE =
                                     zeroed();
-
+                                let our_controller_index = controller_index + 1;
                                 let old_controller =
-                                    &mut old_input.controllers[controller_index as usize];
+                                    &mut old_input.controllers[our_controller_index as usize];
 
                                 let mut new_controller: &mut GameControllerInput =
-                                    &mut new_input.controllers[controller_index as usize];
+                                    &mut new_input.controllers[our_controller_index as usize];
 
                                 //slow, will get removed in the future
                                 if XInputGetState(controller_index, &mut controller_state)
                                     == winapi::shared::winerror::ERROR_SUCCESS
                                 {
+                                    new_controller.is_connected = true as i32;
                                     let pad = &controller_state.Gamepad;
 
-                                    /*      let up =
+                                    let up =
                                         pad.wButtons & winapi::um::xinput::XINPUT_GAMEPAD_DPAD_UP;
                                     let down =
                                         pad.wButtons & winapi::um::xinput::XINPUT_GAMEPAD_DPAD_DOWN;
                                     let left =
                                         pad.wButtons & winapi::um::xinput::XINPUT_GAMEPAD_DPAD_LEFT;
                                     let right = pad.wButtons
-                                        & winapi::um::xinput::XINPUT_GAMEPAD_DPAD_RIGHT; */
+                                        & winapi::um::xinput::XINPUT_GAMEPAD_DPAD_RIGHT;
+                                    new_controller.is_analog = true as i32;
+                                    new_controller.stick_average_x =
+                                        win32_process_xinput_stickvalue(
+                                            pad.sThumbLX,
+                                            XINPUT_GAMEPAD_LEFT_THUMB_DEADZONE,
+                                        );
+;
+                                    new_controller.stick_average_y =
+                                        win32_process_xinput_stickvalue(
+                                            pad.sThumbLY,
+                                            XINPUT_GAMEPAD_LEFT_THUMB_DEADZONE,
+                                        );
 
-                                    let x = if pad.sThumbLX < 0 {
-                                        pad.sThumbLX as f32 / 32768.0 as f32
-                                    } else {
-                                        pad.sThumbLX as f32 / 32767.0 as f32
-                                    };
+                                    if up != 0 {
+                                        new_controller.stick_average_y = 1.0 as f32;
+                                    }
+                                    if down != 0 {
+                                        new_controller.stick_average_y = -1.0 as f32;
+                                    }
+                                    if left != 0 {
+                                        new_controller.stick_average_x = -1.0 as f32;
+                                    }
+                                    if right != 0 {
+                                        new_controller.stick_average_x = 1.0 as f32;
+                                    }
 
-                                    new_controller.end_x = x;
-                                    new_controller.max_x = x;
-                                    new_controller.min_x = x;
+                                    let threshold = 0.5;
 
-                                    let y = if pad.sThumbLY < 0 {
-                                        pad.sThumbLY as f32 / 32768.0 as f32
-                                    } else {
-                                        pad.sThumbLY as f32 / 32767.0 as f32
-                                    };
-                                    new_controller.end_y = y;
-                                    new_controller.max_y = y;
-                                    new_controller.min_y = y;
+                                    win32_process_xinput_digital_button(
+                                        if new_controller.stick_average_x < -threshold {
+                                            1
+                                        } else {
+                                            0
+                                        },
+                                        &old_controller.move_left(),
+                                        1,
+                                        &mut new_controller.move_left(),
+                                    );
 
-                                    /* let stick_x = pad.sThumbLX;
-                                    let stick_y = pad.sThumbLY; */
+                                    win32_process_xinput_digital_button(
+                                        if new_controller.stick_average_x > threshold {
+                                            1
+                                        } else {
+                                            0
+                                        },
+                                        &old_controller.move_left(),
+                                        1,
+                                        &mut new_controller.move_left(),
+                                    );
+
+                                    win32_process_xinput_digital_button(
+                                        if new_controller.stick_average_y < -threshold {
+                                            1
+                                        } else {
+                                            0
+                                        },
+                                        &old_controller.move_left(),
+                                        1,
+                                        &mut new_controller.move_left(),
+                                    );
+
+                                    win32_process_xinput_digital_button(
+                                        if new_controller.stick_average_y > threshold {
+                                            1
+                                        } else {
+                                            0
+                                        },
+                                        &old_controller.move_left(),
+                                        1,
+                                        &mut new_controller.move_left(),
+                                    );
 
                                     win32_process_xinput_digital_button(
                                         pad.wButtons.into(),
-                                        &old_controller.down(),
+                                        &old_controller.action_down(),
                                         winapi::um::xinput::XINPUT_GAMEPAD_A.into(),
-                                        &mut new_controller.down(),
+                                        &mut new_controller.action_down(),
                                     );
                                     win32_process_xinput_digital_button(
                                         pad.wButtons.into(),
-                                        &old_controller.right(),
+                                        &old_controller.action_right(),
                                         winapi::um::xinput::XINPUT_GAMEPAD_B.into(),
-                                        &mut new_controller.right(),
+                                        &mut new_controller.action_right(),
                                     );
 
                                     win32_process_xinput_digital_button(
                                         pad.wButtons.into(),
-                                        &old_controller.left(),
+                                        &old_controller.action_left(),
                                         winapi::um::xinput::XINPUT_GAMEPAD_X.into(),
-                                        &mut new_controller.left(),
+                                        &mut new_controller.action_left(),
                                     );
 
                                     win32_process_xinput_digital_button(
                                         pad.wButtons.into(),
-                                        &old_controller.up(),
+                                        &old_controller.action_up(),
                                         winapi::um::xinput::XINPUT_GAMEPAD_Y.into(),
-                                        &mut new_controller.up(),
+                                        &mut new_controller.action_up(),
                                     );
 
                                     win32_process_xinput_digital_button(
@@ -654,6 +744,22 @@ pub fn create_window() {
                                         winapi::um::xinput::XINPUT_GAMEPAD_RIGHT_SHOULDER.into(),
                                         &mut new_controller.right_shoulder(),
                                     );
+
+                                    win32_process_xinput_digital_button(
+                                        pad.wButtons.into(),
+                                        &old_controller.start,
+                                        winapi::um::xinput::XINPUT_GAMEPAD_START.into(),
+                                        &mut new_controller.start,
+                                    );
+
+                                    win32_process_xinput_digital_button(
+                                        pad.wButtons.into(),
+                                        &old_controller.back,
+                                        winapi::um::xinput::XINPUT_GAMEPAD_BACK.into(),
+                                        &mut new_controller.back,
+                                    );
+                                } else {
+                                    new_controller.is_connected = false as i32;
                                 }
                             }
 
