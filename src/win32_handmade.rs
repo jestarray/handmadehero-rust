@@ -406,11 +406,17 @@ unsafe fn win32_process_pending_messages(keyboard_controller: &mut GameControlle
                             );
                         }
                         VK_ESCAPE => {
-                            win32_process_keyboard_message(&mut keyboard_controller.start, is_down);
+                            win32_process_keyboard_message(
+                                &mut keyboard_controller.start(),
+                                is_down,
+                            );
                             RUNNING = false;
                         }
                         VK_SPACE => {
-                            win32_process_keyboard_message(&mut keyboard_controller.back, is_down);
+                            win32_process_keyboard_message(
+                                &mut keyboard_controller.back(),
+                                is_down,
+                            );
                         }
                         VK_F4 => {
                             if alt_is_down {
@@ -501,9 +507,9 @@ fn win32_process_xinput_digital_button(
 fn win32_process_xinput_stickvalue(value: SHORT, dead_zone_threshold: SHORT) -> f32 {
     let mut result = 0.0;
     if value < -dead_zone_threshold {
-        result = value as f32 / 32768.0 as f32
+        result = (value + dead_zone_threshold) as f32 / (32768.0 - dead_zone_threshold as f32)
     } else if value > dead_zone_threshold {
-        result = value as f32 / 32767.0 as f32
+        result = (value - dead_zone_threshold) as f32 / (32767.0 - dead_zone_threshold as f32)
     };
     result
 }
@@ -645,17 +651,27 @@ pub fn create_window() {
                                             XINPUT_GAMEPAD_LEFT_THUMB_DEADZONE,
                                         );
 
+                                    if new_controller.stick_average_x != 0.0
+                                        || new_controller.stick_average_y != 0.0
+                                    {
+                                        new_controller.is_analog = true as i32;
+                                    }
+
                                     if up != 0 {
                                         new_controller.stick_average_y = 1.0 as f32;
+                                        new_controller.is_analog = false as i32;
                                     }
                                     if down != 0 {
                                         new_controller.stick_average_y = -1.0 as f32;
+                                        new_controller.is_analog = false as i32;
                                     }
                                     if left != 0 {
                                         new_controller.stick_average_x = -1.0 as f32;
+                                        new_controller.is_analog = false as i32;
                                     }
                                     if right != 0 {
                                         new_controller.stick_average_x = 1.0 as f32;
+                                        new_controller.is_analog = false as i32;
                                     }
 
                                     let threshold = 0.5;
@@ -677,9 +693,9 @@ pub fn create_window() {
                                         } else {
                                             0
                                         },
-                                        &old_controller.move_left(),
+                                        &old_controller.move_right(),
                                         1,
-                                        &mut new_controller.move_left(),
+                                        &mut new_controller.move_right(),
                                     );
 
                                     win32_process_xinput_digital_button(
@@ -688,9 +704,9 @@ pub fn create_window() {
                                         } else {
                                             0
                                         },
-                                        &old_controller.move_left(),
+                                        &old_controller.move_down(),
                                         1,
-                                        &mut new_controller.move_left(),
+                                        &mut new_controller.move_down(),
                                     );
 
                                     win32_process_xinput_digital_button(
@@ -699,9 +715,9 @@ pub fn create_window() {
                                         } else {
                                             0
                                         },
-                                        &old_controller.move_left(),
+                                        &old_controller.move_up(),
                                         1,
-                                        &mut new_controller.move_left(),
+                                        &mut new_controller.move_up(),
                                     );
 
                                     win32_process_xinput_digital_button(
@@ -747,16 +763,16 @@ pub fn create_window() {
 
                                     win32_process_xinput_digital_button(
                                         pad.wButtons.into(),
-                                        &old_controller.start,
+                                        &old_controller.start(),
                                         winapi::um::xinput::XINPUT_GAMEPAD_START.into(),
-                                        &mut new_controller.start,
+                                        &mut new_controller.start(),
                                     );
 
                                     win32_process_xinput_digital_button(
                                         pad.wButtons.into(),
-                                        &old_controller.back,
+                                        &old_controller.back(),
                                         winapi::um::xinput::XINPUT_GAMEPAD_BACK.into(),
-                                        &mut new_controller.back,
+                                        &mut new_controller.back(),
                                     );
                                 } else {
                                     new_controller.is_connected = false as i32;

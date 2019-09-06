@@ -43,9 +43,7 @@ struct GameControllerInput {
     stick_average_x: f32,
     stick_average_y: f32,
 
-    buttons: [GameButtonState; 10],
-    start: GameButtonState,
-    back: GameButtonState,
+    buttons: [GameButtonState; 12],
 }
 
 impl GameControllerInput {
@@ -80,6 +78,12 @@ impl GameControllerInput {
     }
     fn right_shoulder(&mut self) -> &mut GameButtonState {
         &mut self.buttons[9]
+    }
+    fn back(&mut self) -> &mut GameButtonState {
+        &mut self.buttons[10]
+    }
+    fn start(&mut self) -> &mut GameButtonState {
+        &mut self.buttons[11]
     }
 }
 
