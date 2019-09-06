@@ -109,7 +109,7 @@ pub fn game_update_and_render(
 ) {
     unsafe {
         let mut game_state = memory.permanent_storage as *mut GameState;
-        if memory.is_initalized == 0 {
+        /*        if memory.is_initalized == 0 {
             (*game_state).tonehz = 256;
             (*game_state).green_offset = 0;
             (*game_state).blue_offset = 0;
@@ -120,7 +120,7 @@ pub fn game_update_and_render(
                 debug_platform_write_entire_file("HH_TEST.out", file.content_size, file.contents);
                 debug_platform_free_file_memory(file.contents);
             }
-        }
+        } */
         let input_0 = &mut input.controllers[0];
         if input_0.is_analog != 0 {
             (*game_state).blue_offset += (4.0 * input_0.end_y) as i32;
