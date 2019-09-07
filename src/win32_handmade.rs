@@ -30,6 +30,7 @@ use winapi::um::fileapi::CREATE_ALWAYS;
 use winapi::um::fileapi::OPEN_EXISTING;
 use winapi::um::handleapi::CloseHandle;
 use winapi::um::libloaderapi::GetModuleHandleW;
+use winapi::um::synchapi::Sleep;
 use winapi::um::winnt::FILE_SHARE_READ;
 use winapi::um::winnt::GENERIC_READ;
 use winapi::um::winnt::GENERIC_WRITE;
@@ -49,7 +50,9 @@ use winapi::um::profileapi::QueryPerformanceFrequency;
 use winapi::um::winnt::MEM_RESERVE;
 use winapi::um::winnt::PF_RDTSC_INSTRUCTION_AVAILABLE;
 
+use winapi::um::mmsystem::TIMERR_NOERROR;
 use winapi::um::profileapi::QueryPerformanceCounter;
+use winapi::um::timeapi::timeBeginPeriod;
 use winapi::um::winuser::GetDC;
 use winapi::um::winuser::PeekMessageW;
 use winapi::um::winuser::PM_REMOVE;
@@ -77,7 +80,36 @@ use winapi::{
 };
 
 static mut RUNNING: bool = true;
+static mut GLOBAL_BACKBUFFER: Win32OffScreenBuffer = Win32OffScreenBuffer {
+    memory: 0 as *mut c_void,
+    width: 0,
+    height: 0,
+    pitch: 0,
+    bytes_per_pixel: 4,
+    info: BITMAPINFO {
+        bmiHeader: BITMAPINFOHEADER {
+            biSize: 0,
+            biWidth: 0,
+            biHeight: 0,
+            biPlanes: 1,
+            biBitCount: 32,
+            biCompression: BI_RGB,
+            biSizeImage: 0,
+            biXPelsPerMeter: 0,
+            biYPelsPerMeter: 0,
+            biClrUsed: 0,
+            biClrImportant: 0,
+        },
+        bmiColors: [RGBQUAD {
+            rgbBlue: 0,
+            rgbGreen: 0,
+            rgbRed: 0,
+            rgbReserved: 0,
+        }],
+    },
+};
 
+static mut PERF_COUNT_FREQUENCY: i64 = 0;
 pub unsafe fn debug_platform_read_entire_file(file_name: &str) -> DebugReadFile {
     let file_name = CString::new(file_name).unwrap();
     let mut result = DebugReadFile {
@@ -196,35 +228,6 @@ fn win32_get_window_dimension(window: HWND) -> Win32WindowDimension {
         Win32WindowDimension { width, height }
     }
 }
-
-static mut GLOBAL_BACKBUFFER: Win32OffScreenBuffer = Win32OffScreenBuffer {
-    memory: 0 as *mut c_void,
-    width: 0,
-    height: 0,
-    pitch: 0,
-    bytes_per_pixel: 4,
-    info: BITMAPINFO {
-        bmiHeader: BITMAPINFOHEADER {
-            biSize: 0,
-            biWidth: 0,
-            biHeight: 0,
-            biPlanes: 1,
-            biBitCount: 32,
-            biCompression: BI_RGB,
-            biSizeImage: 0,
-            biXPelsPerMeter: 0,
-            biYPelsPerMeter: 0,
-            biClrUsed: 0,
-            biClrImportant: 0,
-        },
-        bmiColors: [RGBQUAD {
-            rgbBlue: 0,
-            rgbGreen: 0,
-            rgbRed: 0,
-            rgbReserved: 0,
-        }],
-    },
-};
 
 fn win32_init_dsound(window: HWND, buffersize: i32, samples_per_sec: u32) {
     //todo: sound
@@ -514,7 +517,18 @@ fn win32_process_xinput_stickvalue(value: SHORT, dead_zone_threshold: SHORT) -> 
     result
 }
 
-pub fn create_window() {
+unsafe fn win32_get_wall_clock() -> LARGE_INTEGER {
+    let mut result = zeroed::<LARGE_INTEGER>();
+    QueryPerformanceCounter(&mut result);
+    return result;
+}
+unsafe fn win32_get_seconds_elasped(start: LARGE_INTEGER, end: LARGE_INTEGER) -> f32 {
+    ((end.QuadPart() - start.QuadPart()) as f32 / PERF_COUNT_FREQUENCY as f32) //as f32, moving cast out here drastically changes value. look into why
+}
+pub unsafe fn create_window() {
+    //change this to win_main
+    let desired_scheduler_ms = 1;
+    let sleep_is_granular = timeBeginPeriod(desired_scheduler_ms) == TIMERR_NOERROR;
     let name = win32_string("HandmadeheroWindowClass");
     let title = win32_string("HandmadeHero");
     unsafe { win32_resize_dibsection(&mut GLOBAL_BACKBUFFER, 1280, 720) };
@@ -534,19 +548,14 @@ pub fn create_window() {
     };
 
     unsafe {
-        let mut prefcounter_frequency_result = zeroed::<LARGE_INTEGER>();
-        QueryPerformanceFrequency(&mut prefcounter_frequency_result);
-        let prefcounter_frequency = prefcounter_frequency_result.QuadPart();
+        let mut perfcounter_frequency_result = zeroed::<LARGE_INTEGER>();
+        QueryPerformanceFrequency(&mut perfcounter_frequency_result);
+        PERF_COUNT_FREQUENCY = *perfcounter_frequency_result.QuadPart();
 
+        let monitor_refresh_hz = 60;
+        let game_update_hz = monitor_refresh_hz / 2;
+        let target_seconds_per_frame: f32 = 1.0 / game_update_hz as f32;
         match RegisterClassW(&wnd_class) {
-            0 => {
-                MessageBoxA(
-                    0 as HWND,
-                    b"Call to RegisterClassEx failed!\0".as_ptr() as *const i8,
-                    b"Win32 Guided Tour\0".as_ptr() as *const i8,
-                    0 as UINT,
-                );
-            }
             _atom => {
                 let window = CreateWindowExW(
                     0,
@@ -592,7 +601,7 @@ pub fn create_window() {
                         let mut old_input = GameInput::default();
                         let mut new_input = GameInput::default();
 
-                        let mut last_counter = zeroed::<LARGE_INTEGER>();
+                        let mut last_counter = win32_get_wall_clock();
                         QueryPerformanceCounter(&mut last_counter);
                         let mut last_cycle_count = _rdtsc();
                         while RUNNING {
@@ -788,6 +797,31 @@ pub fn create_window() {
                             game_update_and_render(&mut game_memory, &mut new_input, &mut buffer);
 
                             let device_context = GetDC(window);
+
+                            let work_counter = win32_get_wall_clock();
+                            let work_seconds_elasped =
+                                win32_get_seconds_elasped(work_counter, last_counter);
+
+                            let mut seconds_elasped_for_frame = work_seconds_elasped;
+
+                            if seconds_elasped_for_frame < target_seconds_per_frame {
+                                if sleep_is_granular {
+                                    let sleep_ms: DWORD = (1000.0
+                                        * (target_seconds_per_frame - seconds_elasped_for_frame))
+                                        as DWORD;
+                                    if sleep_ms > 0 {
+                                        Sleep(sleep_ms);
+                                    }
+                                }
+                                while seconds_elasped_for_frame < target_seconds_per_frame {
+                                    seconds_elasped_for_frame = win32_get_seconds_elasped(
+                                        last_counter,
+                                        win32_get_wall_clock(),
+                                    );
+                                }
+                            } else {
+                                //TODO: MISSED FRAME RATE
+                            }
                             let dimension = win32_get_window_dimension(window);
                             win32_display_buffer_in_window(
                                 device_context,
@@ -799,28 +833,27 @@ pub fn create_window() {
                                 dimension.width,
                                 dimension.height,
                             );
-                            ReleaseDC(window, device_context);
-                            /*  let end_cyle_counter = _rdtsc();
+                            //ReleaseDC(window, device_context);
 
-                            let mut end_counter = zeroed::<LARGE_INTEGER>();
-                            QueryPerformanceCounter(&mut end_counter);
+                            let temp = new_input;
+                            new_input = old_input;
+                            old_input = temp;
 
-                            let cycles_elapsed = end_cyle_counter - last_cycle_count;
-                            let counter_elapsed = end_counter.QuadPart() - last_counter.QuadPart();
+                            let end_counter = win32_get_wall_clock();
+                            let ms_per_frame =
+                                1000.0 * win32_get_seconds_elasped(last_counter, end_counter);
+                            last_counter = end_counter;
 
-                            let ms_per_frame = (1000 * counter_elapsed) / prefcounter_frequency;
-                            let fps = prefcounter_frequency / counter_elapsed;
+                            let end_cyle_counter = _rdtsc();
+                            let cycles_elapsed = end_cyle_counter - last_cycle_count;;
+                            last_cycle_count = end_cyle_counter;
+
+                            let fps = 0.0;
                             let mcpf: i32 = cycles_elapsed as i32 / (1000 * 1000);
                             println!(
                                 "{:#?} ms, the fps is : {:#?}, cycles {:#?}",
                                 ms_per_frame, fps, mcpf
                             );
-                            last_counter = end_counter;
-                            last_cycle_count = end_cyle_counter; */
-
-                            let temp = new_input;
-                            new_input = old_input;
-                            old_input = temp;
                         }
                     } else {
                         println!("could not allocate memory");

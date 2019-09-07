@@ -1,4 +1,4 @@
-//comment out for println! to work
+//comment out for println! to work, uncomment for an autocall to winmain
 //#![windows_subsystem = "windows"]
 /*
 
@@ -112,7 +112,7 @@ pub struct DebugReadFile {
 }
 
 fn main() {
-    create_window();
+    unsafe { create_window() };
 }
 
 pub fn game_update_and_render(
