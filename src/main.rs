@@ -19,7 +19,6 @@ typedef double real64;
 
 */
 mod win32_handmade;
-
 use crate::win32_handmade::*;
 use std::ffi::c_void;
 use std::ptr::null_mut;
@@ -28,6 +27,12 @@ pub struct GameOffScreenBuffer {
     width: i32,
     height: i32,
     pitch: i32,
+}
+pub struct game_sound_output_buffer {
+    SamplesPerSecond: u32,
+    SampleCount: u32,
+
+    samples: *mut i16,
 }
 
 #[derive(Default)]
@@ -96,7 +101,7 @@ struct GameButtonState {
 pub struct GameState {
     green_offset: i32,
     blue_offset: i32,
-    tonehz: i32,
+    tonehz: u32,
 }
 pub struct GameMemory {
     is_initalized: i32,
@@ -112,7 +117,7 @@ pub struct DebugReadFile {
 }
 
 fn main() {
-    unsafe { create_window() };
+    unsafe { winmain() };
 }
 
 pub fn game_update_and_render(
@@ -122,22 +127,25 @@ pub fn game_update_and_render(
 ) {
     unsafe {
         let mut game_state = memory.permanent_storage as *mut GameState;
-        /*        if memory.is_initalized == 0 {
+        if memory.is_initalized == 0 {
             (*game_state).tonehz = 256;
             (*game_state).green_offset = 0;
             (*game_state).blue_offset = 0;
             memory.is_initalized = 1;
-            let file = debug_platform_read_entire_file("D:\\handmadehero-rust\\src\\main.rs");
+            /*   let file = debug_platform_read_entire_file("D:\\handmadehero-rust\\src\\main.rs");
 
             if file.contents != null_mut() {
                 debug_platform_write_entire_file("HH_TEST.out", file.content_size, file.contents);
                 debug_platform_free_file_memory(file.contents);
-            }
-        } */
+            } */
+        }
         for controller_index in 0..input.controllers.len() {
             let controller = &mut input.controllers[controller_index];
             if controller.is_analog != 0 {
                 (*game_state).blue_offset += (4.0 * controller.stick_average_x) as i32;
+                (*game_state).tonehz = 256u32
+                    .overflowing_add((128.0 * controller.stick_average_y) as u32)
+                    .0;
             } else {
                 if controller.move_left().ended_down != 0 {
                     (*game_state).blue_offset -= 1;
@@ -151,11 +159,32 @@ pub fn game_update_and_render(
                 (*game_state).green_offset += 1;
             }
         }
+
         render_weird_gradient(
             &mut buffer,
             (*game_state).blue_offset,
             (*game_state).green_offset,
-        )
+        );
+    }
+}
+unsafe fn GameOutputSound(buffer: &mut game_sound_output_buffer, tone_hz: u32) {
+    static mut T_SINE: f32 = 0.0;
+    let tone_volume = 3000;
+    let wave_period = buffer.SamplesPerSecond / tone_hz;
+
+    let mut sample_out = buffer.samples;
+
+    for _ in 0..buffer.SampleCount {
+        unsafe {
+            let sine_value = T_SINE.sin();
+            let sample_value = (sine_value * tone_volume as f32) as i16;
+            (*sample_out) = sample_value;
+            sample_out = sample_out.add(1);
+            (*sample_out) = sample_value;
+            sample_out = sample_out.add(1);
+
+            T_SINE += (1.0 / wave_period as f32) * 2.0 * std::f32::consts::PI;
+        }
     }
 }
 
@@ -173,4 +202,9 @@ unsafe fn render_weird_gradient(
         }
         row = row.offset(buffer.pitch as isize);
     }
+}
+
+unsafe fn GameGetSoundSamples(Memory: &mut GameMemory, SoundBuffer: &mut game_sound_output_buffer) {
+    let GameState = Memory.permanent_storage as *mut GameState;
+    GameOutputSound(SoundBuffer, (*GameState).tonehz);
 }

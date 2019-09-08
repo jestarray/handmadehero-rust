@@ -10,3 +10,7 @@ edition = "2018"
 
 [target.'cfg(windows)'.dependencies]
 winapi = { version = "0.3.8", features = ["winuser", "memoryapi", "libloaderapi", "xinput", "winerror", "profileapi", "dsound", "fileapi", "handleapi", "synchapi", "timeapi"] }
+
+[features]
+default = ["handmade_internal"] # add "handmade_internal" for debug cfg defs to work
+handmade_internal = []
