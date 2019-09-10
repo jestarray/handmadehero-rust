@@ -1,5 +1,3 @@
-//comment out for println! to work, uncomment for an autocall to winmain
-//#![windows_subsystem = "windows"]
 /*
 
 type alies
@@ -18,109 +16,109 @@ typedef float real32;
 typedef double real64;
 
 */
-mod win32_handmade;
-use crate::win32_handmade::*;
 use std::ffi::c_void;
 use std::ptr::null_mut;
 pub struct GameOffScreenBuffer {
-    memory: *mut c_void,
-    width: i32,
-    height: i32,
-    pitch: i32,
+    pub memory: *mut c_void,
+    pub width: i32,
+    pub height: i32,
+    pub pitch: i32,
 }
 pub struct game_sound_output_buffer {
-    SamplesPerSecond: u32,
-    SampleCount: u32,
+    pub SamplesPerSecond: u32,
+    pub SampleCount: u32,
 
-    samples: *mut i16,
+    pub samples: *mut i16,
 }
 
 #[derive(Default)]
 pub struct GameInput {
     //TODO(jest): insert clock values
-    controllers: [GameControllerInput; 5],
+    pub controllers: [GameControllerInput; 5],
 }
 #[derive(Default)]
-struct GameControllerInput {
-    is_connected: i32,
-    is_analog: i32,
+pub struct GameControllerInput {
+    pub is_connected: i32,
+    pub is_analog: i32,
 
-    stick_average_x: f32,
-    stick_average_y: f32,
+    pub stick_average_x: f32,
+    pub stick_average_y: f32,
 
-    buttons: [GameButtonState; 12],
+    pub buttons: [GameButtonState; 12],
 }
 
 impl GameControllerInput {
-    fn move_up(&mut self) -> &mut GameButtonState {
+    pub fn move_up(&mut self) -> &mut GameButtonState {
         &mut self.buttons[0]
     }
-    fn move_down(&mut self) -> &mut GameButtonState {
+    pub fn move_down(&mut self) -> &mut GameButtonState {
         &mut self.buttons[1]
     }
-    fn move_left(&mut self) -> &mut GameButtonState {
+    pub fn move_left(&mut self) -> &mut GameButtonState {
         &mut self.buttons[2]
     }
-    fn move_right(&mut self) -> &mut GameButtonState {
+    pub fn move_right(&mut self) -> &mut GameButtonState {
         &mut self.buttons[3]
     }
 
-    fn action_up(&mut self) -> &mut GameButtonState {
+    pub fn action_up(&mut self) -> &mut GameButtonState {
         &mut self.buttons[4]
     }
-    fn action_down(&mut self) -> &mut GameButtonState {
+    pub fn action_down(&mut self) -> &mut GameButtonState {
         &mut self.buttons[5]
     }
-    fn action_left(&mut self) -> &mut GameButtonState {
+    pub fn action_left(&mut self) -> &mut GameButtonState {
         &mut self.buttons[6]
     }
-    fn action_right(&mut self) -> &mut GameButtonState {
+    pub fn action_right(&mut self) -> &mut GameButtonState {
         &mut self.buttons[7]
     }
 
-    fn left_shoulder(&mut self) -> &mut GameButtonState {
+    pub fn left_shoulder(&mut self) -> &mut GameButtonState {
         &mut self.buttons[8]
     }
-    fn right_shoulder(&mut self) -> &mut GameButtonState {
+    pub fn right_shoulder(&mut self) -> &mut GameButtonState {
         &mut self.buttons[9]
     }
-    fn back(&mut self) -> &mut GameButtonState {
+    pub fn back(&mut self) -> &mut GameButtonState {
         &mut self.buttons[10]
     }
-    fn start(&mut self) -> &mut GameButtonState {
+    pub fn start(&mut self) -> &mut GameButtonState {
         &mut self.buttons[11]
     }
 }
 
 #[derive(Default)]
-struct GameButtonState {
-    half_transition_count: i32,
-    ended_down: i32,
+pub struct GameButtonState {
+    pub half_transition_count: i32,
+    pub ended_down: i32,
 }
 #[derive(Default)]
 pub struct GameState {
-    green_offset: i32,
-    blue_offset: i32,
-    tonehz: u32,
+    pub green_offset: i32,
+    pub blue_offset: i32,
+    pub tonehz: u32,
+    pub t_sine: f32,
 }
 pub struct GameMemory {
-    is_initalized: i32,
-    permanent_storage_size: u64,
-    transient_storage_size: u64,
-    transient_storage: *mut c_void,
-    permanent_storage: *mut c_void,
+    pub is_initalized: i32,
+    pub permanent_storage_size: u64,
+    pub transient_storage_size: u64,
+    pub transient_storage: *mut c_void,
+    pub permanent_storage: *mut c_void,
+    pub debug_platform_read_entire_file: unsafe fn(file_name: &str) -> DebugReadFile,
+    pub debug_platform_free_file_memory: unsafe fn(memory: *mut std::ffi::c_void),
+    pub debug_platform_write_entire_file:
+        unsafe fn(file_name: &str, memory_size: u32, memory: *mut std::ffi::c_void) -> bool,
 }
 
 pub struct DebugReadFile {
-    content_size: u32,
-    contents: *mut c_void,
+    pub content_size: u32,
+    pub contents: *mut c_void,
 }
 
-fn main() {
-    unsafe { winmain() };
-}
-
-pub fn game_update_and_render(
+#[no_mangle]
+pub extern "C" fn game_update_and_render(
     memory: &mut GameMemory,
     input: &mut GameInput,
     mut buffer: &mut GameOffScreenBuffer,
@@ -131,13 +129,19 @@ pub fn game_update_and_render(
             (*game_state).tonehz = 256;
             (*game_state).green_offset = 0;
             (*game_state).blue_offset = 0;
+            (*game_state).t_sine = 0.0;
             memory.is_initalized = 1;
-            /*   let file = debug_platform_read_entire_file("D:\\handmadehero-rust\\src\\main.rs");
+            let file =
+                (memory.debug_platform_read_entire_file)("D:\\handmadehero-rust\\src\\handmade.rs");
 
             if file.contents != null_mut() {
-                debug_platform_write_entire_file("HH_TEST.out", file.content_size, file.contents);
-                debug_platform_free_file_memory(file.contents);
-            } */
+                (memory.debug_platform_write_entire_file)(
+                    "HH_TEST.out",
+                    file.content_size,
+                    file.contents,
+                );
+                (memory.debug_platform_free_file_memory)(file.contents);
+            }
         }
         for controller_index in 0..input.controllers.len() {
             let controller = &mut input.controllers[controller_index];
@@ -167,8 +171,11 @@ pub fn game_update_and_render(
         );
     }
 }
-unsafe fn GameOutputSound(buffer: &mut game_sound_output_buffer, tone_hz: u32) {
-    static mut T_SINE: f32 = 0.0;
+unsafe fn GameOutputSound(
+    game_state: *mut GameState,
+    buffer: &mut game_sound_output_buffer,
+    tone_hz: u32,
+) {
     let tone_volume = 3000;
     let wave_period = buffer.SamplesPerSecond / tone_hz;
 
@@ -176,14 +183,14 @@ unsafe fn GameOutputSound(buffer: &mut game_sound_output_buffer, tone_hz: u32) {
 
     for _ in 0..buffer.SampleCount {
         unsafe {
-            let sine_value = T_SINE.sin();
+            let sine_value = (*game_state).t_sine.sin();
             let sample_value = (sine_value * tone_volume as f32) as i16;
             (*sample_out) = sample_value;
             sample_out = sample_out.add(1);
             (*sample_out) = sample_value;
             sample_out = sample_out.add(1);
 
-            T_SINE += (1.0 / wave_period as f32) * 2.0 * std::f32::consts::PI;
+            (*game_state).t_sine += (1.0 / wave_period as f32) * 2.0 * std::f32::consts::PI;
         }
     }
 }
@@ -204,7 +211,11 @@ unsafe fn render_weird_gradient(
     }
 }
 
-unsafe fn GameGetSoundSamples(Memory: &mut GameMemory, SoundBuffer: &mut game_sound_output_buffer) {
+#[no_mangle]
+pub unsafe extern "C" fn GameGetSoundSamples(
+    Memory: &mut GameMemory,
+    SoundBuffer: &mut game_sound_output_buffer,
+) {
     let GameState = Memory.permanent_storage as *mut GameState;
-    GameOutputSound(SoundBuffer, (*GameState).tonehz);
+    GameOutputSound(GameState, SoundBuffer, (*GameState).tonehz);
 }

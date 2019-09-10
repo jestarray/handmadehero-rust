@@ -14,3 +14,13 @@ winapi = { version = "0.3.8", features = ["winuser", "memoryapi", "libloaderapi"
 [features]
 default = ["handmade_internal"] # add "handmade_internal" for debug cfg defs to work
 handmade_internal = []
+
+[lib]
+path = "src/handmade.rs"
+name = "handmade"
+src = "src/handmade.rs"
+crate-type = ["lib", "cdylib"] #cdylib to make handmade.rs callable from C 
+
+[[bin]]
+name = "win32_handmade"
+path = "src/win32_handmade.rs"

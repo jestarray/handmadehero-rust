@@ -1,8 +1,8 @@
-#![windows_subsystem = "windows"]
-
-use crate::game_update_and_render;
-use crate::*; //import from main.rs, should move this
+//#![windows_subsystem = "windows"] //comment out for cmd prompt to pop up and println! to work
 use core::arch::x86_64::_rdtsc;
+#[link(name = "handmade.dll")]
+//use crate::*; //import from main.rs, should move this
+use handmade::*;
 use std::ffi::CString;
 use std::mem::transmute;
 use std::{
@@ -16,46 +16,47 @@ use std::{
 use winapi::ctypes::c_void;
 use winapi::shared::guiddef::LPCGUID;
 use winapi::shared::minwindef::DWORD;
+use winapi::shared::minwindef::HMODULE;
 use winapi::shared::mmreg::WAVEFORMATEX;
 use winapi::shared::mmreg::WAVE_FORMAT_PCM;
 use winapi::shared::ntdef::SHORT;
 use winapi::shared::winerror::ERROR_DEVICE_NOT_CONNECTED;
 use winapi::shared::winerror::SUCCEEDED;
+use winapi::um::dsound::IDirectSound;
 use winapi::um::dsound::DSBCAPS_PRIMARYBUFFER;
 use winapi::um::dsound::DSBPLAY_LOOPING;
 use winapi::um::dsound::DSBUFFERDESC;
+use winapi::um::dsound::DSSCL_PRIORITY;
 use winapi::um::dsound::DS_OK;
 use winapi::um::dsound::LPDIRECTSOUND;
 use winapi::um::dsound::LPDIRECTSOUNDBUFFER;
 use winapi::um::fileapi::CreateFileA;
 use winapi::um::fileapi::GetFileSizeEx;
+use winapi::um::fileapi::ReadFile;
 use winapi::um::fileapi::WriteFile;
 use winapi::um::fileapi::CREATE_ALWAYS;
 use winapi::um::fileapi::OPEN_EXISTING;
 use winapi::um::handleapi::CloseHandle;
+use winapi::um::handleapi::INVALID_HANDLE_VALUE;
+use winapi::um::libloaderapi::FreeLibrary;
 use winapi::um::libloaderapi::GetModuleHandleW;
 use winapi::um::libloaderapi::GetProcAddress;
 use winapi::um::libloaderapi::LoadLibraryA;
+use winapi::um::memoryapi::VirtualAlloc;
+use winapi::um::memoryapi::VirtualFree;
+use winapi::um::profileapi::QueryPerformanceFrequency;
 use winapi::um::synchapi::Sleep;
 use winapi::um::winnt::FILE_SHARE_READ;
 use winapi::um::winnt::GENERIC_READ;
 use winapi::um::winnt::GENERIC_WRITE;
 use winapi::um::winnt::LARGE_INTEGER;
+use winapi::um::winnt::MEM_RESERVE;
+use winapi::um::winnt::PF_RDTSC_INSTRUCTION_AVAILABLE;
 use winapi::um::winuser::MessageBoxA;
 use winapi::um::winuser::ReleaseDC;
 use winapi::um::xinput::XINPUT_STATE;
 use winapi::um::xinput::XINPUT_VIBRATION;
 use winapi::um::xinput::XUSER_MAX_COUNT;
-
-use winapi::um::dsound::IDirectSound;
-use winapi::um::dsound::DSSCL_PRIORITY;
-use winapi::um::fileapi::ReadFile;
-use winapi::um::handleapi::INVALID_HANDLE_VALUE;
-use winapi::um::memoryapi::VirtualAlloc;
-use winapi::um::memoryapi::VirtualFree;
-use winapi::um::profileapi::QueryPerformanceFrequency;
-use winapi::um::winnt::MEM_RESERVE;
-use winapi::um::winnt::PF_RDTSC_INSTRUCTION_AVAILABLE;
 
 use winapi::shared::ntdef::HRESULT;
 use winapi::um::mmsystem::TIMERR_NOERROR;
@@ -321,7 +322,7 @@ unsafe fn Win32DebugDrawVertical(
 fn Win32DebugSyncDisplay(
     Backbuffer: &mut Win32OffScreenBuffer,
     MarkerCount: i32,
-    Markers: &[win32_handmade::win32_debug_time_marker],
+    Markers: &[win32_debug_time_marker],
     CurrentMarkerIndex: i32,
     SoundOutput: &mut win32_sound_output,
     TargetSecondsPerFrame: f32,
@@ -438,6 +439,55 @@ fn Win32DebugSyncDisplay(
             WriteColor,
         );
     }
+}
+type GameUpdateAndRender =
+    extern "C" fn(memory: &mut GameMemory, input: &mut GameInput, buffer: &mut GameOffScreenBuffer);
+
+type GameGetSoundSamples =
+    unsafe extern "C" fn(Memory: &mut GameMemory, SoundBuffer: &mut game_sound_output_buffer);
+struct Win32GameCode {
+    game_code_dll: HMODULE,
+    update_and_render: GameUpdateAndRender,
+    get_sound_samples: GameGetSoundSamples,
+    is_valid: bool,
+}
+
+unsafe fn win32_load_game_code() -> Win32GameCode {
+    let game_code_dll = LoadLibraryA(cstring!("handmade.dll").as_ptr());
+
+    let mut game_code = Win32GameCode {
+        game_code_dll,
+        update_and_render: game_update_and_render,
+        get_sound_samples: GameGetSoundSamples,
+        is_valid: false,
+    };
+
+    if game_code_dll != null_mut() {
+        let update = transmute(GetProcAddress(
+            game_code_dll,
+            cstring!("game_update_and_render").as_ptr(),
+        ));
+
+        let get_sound_samples = transmute(GetProcAddress(
+            game_code_dll,
+            cstring!("GameGetSoundSamples").as_ptr(),
+        ));
+        game_code.update_and_render = update;
+        game_code.get_sound_samples = get_sound_samples;
+        println!("LOADED DLL SUCESSFULLY");
+        game_code.is_valid = true;
+    } else {
+        println!("FAILED TO LOAD GAMECODE");
+    }
+    game_code
+}
+unsafe fn win32_unload_game_code(game_code: &mut Win32GameCode) {
+    if game_code.game_code_dll != null_mut() {
+        FreeLibrary(game_code.game_code_dll);
+    }
+    game_code.is_valid = false;
+    game_code.update_and_render = game_update_and_render;
+    game_code.get_sound_samples = GameGetSoundSamples;
 }
 
 type XInputGetStateFn = extern "system" fn(DWORD, *mut XINPUT_STATE) -> DWORD;
@@ -868,7 +918,14 @@ unsafe fn win32_get_wall_clock() -> LARGE_INTEGER {
 unsafe fn win32_get_seconds_elasped(start: LARGE_INTEGER, end: LARGE_INTEGER) -> f32 {
     ((end.QuadPart() - start.QuadPart()) as f32 / PERF_COUNT_FREQUENCY as f32) //as f32, moving cast out here drastically changes value. look into why
 }
-pub unsafe fn winmain() {
+
+fn main() {
+    unsafe {
+        winmain();
+    }
+}
+pub unsafe extern "system" fn winmain() {
+    let game_code = win32_load_game_code();
     let mut perfcounter_frequency_result = zeroed::<LARGE_INTEGER>();
     QueryPerformanceFrequency(&mut perfcounter_frequency_result);
     PERF_COUNT_FREQUENCY = *perfcounter_frequency_result.QuadPart();
@@ -952,6 +1009,9 @@ pub unsafe fn winmain() {
                     transient_storage_size: 4 * 1024 * 1024 * 1024, //4gb
                     transient_storage: null_mut() as *mut std::ffi::c_void,
                     permanent_storage: null_mut() as *mut std::ffi::c_void,
+                    debug_platform_free_file_memory,
+                    debug_platform_read_entire_file,
+                    debug_platform_write_entire_file,
                 };
 
                 game_memory.permanent_storage = VirtualAlloc(
@@ -982,7 +1042,6 @@ pub unsafe fn winmain() {
                     let AudioLatencyBytes = 0;
                     let AudioLatencySeconds: f32 = 0.0;
                     let mut SoundIsValid = false;
-                    // QueryPerformanceCounter(&mut last_counter);
 
                     let mut last_cycle_count = _rdtsc();
                     while RUNNING {
@@ -1175,7 +1234,11 @@ pub unsafe fn winmain() {
                             width: GLOBAL_BACKBUFFER.width,
                             pitch: GLOBAL_BACKBUFFER.pitch,
                         };
-                        game_update_and_render(&mut game_memory, &mut new_input, &mut buffer);
+                        (game_code.update_and_render)(
+                            &mut game_memory,
+                            &mut new_input,
+                            &mut buffer,
+                        );
 
                         let AudioWallClock = win32_get_wall_clock();
                         let FromBeginToAudioSeconds =
@@ -1240,7 +1303,7 @@ pub unsafe fn winmain() {
                                 SampleCount: BytesToWrite / SoundOutput.BytesPerSample,
                                 samples: samples,
                             };
-                            GameGetSoundSamples(&mut game_memory, &mut SoundBuffer);
+                            (game_code.get_sound_samples)(&mut game_memory, &mut SoundBuffer);
 
                             /*
 

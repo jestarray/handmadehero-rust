@@ -9,9 +9,12 @@ e18: 1:13:00 debunks why you shouldn't add previous frame time to compensate for
 
 ## todo:
 
+* follow rust naming conventions
 * clean null types
-* make xinput and direct sound optional 
-* make subsystem = windows for winmain
-* add skipped sound tutorial code
 * avoid unsafe as much as possible, e.g use refernces and avoid null with option<T>
-* make vulkan version to learn
+* make vulkan version to learn?
+* handmade.exe currently copies the handmade.dll functions entirely, opposed to having lightweight stub functions 
+
+# translation notes:
+* handmade.rs = handmade.h(contains interface, structs etc both used by the platform layer and the game) & handmade.cpp
+* win32_handmade.rs = win32_handmade.cpp
