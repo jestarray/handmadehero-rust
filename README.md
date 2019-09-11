@@ -18,3 +18,4 @@ e18: 1:13:00 debunks why you shouldn't add previous frame time to compensate for
 # translation notes:
 * handmade.rs = handmade.h(contains interface, structs etc both used by the platform layer and the game) & handmade.cpp
 * win32_handmade.rs = win32_handmade.cpp
+* assign calls to cstring!("") to a variable first, then .as_ptr(), otherwise they return empty: https://stackoverflow.com/questions/52174925/cstringnew-unwrap-as-ptr-gives-empty-const-c-char

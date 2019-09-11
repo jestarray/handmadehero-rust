@@ -9,7 +9,7 @@ edition = "2018"
 [dependencies]
 
 [target.'cfg(windows)'.dependencies]
-winapi = { version = "0.3.8", features = ["winuser", "memoryapi", "libloaderapi", "xinput", "winerror", "profileapi", "dsound", "fileapi", "handleapi", "synchapi", "timeapi"] }
+winapi = { version = "0.3.8", features = ["winuser", "memoryapi", "libloaderapi", "xinput", "winerror", "profileapi", "dsound", "fileapi", "handleapi", "synchapi", "timeapi", "winbase"] }
 
 [features]
 default = ["handmade_internal"] # add "handmade_internal" for debug cfg defs to work
@@ -19,8 +19,11 @@ handmade_internal = []
 path = "src/handmade.rs"
 name = "handmade"
 src = "src/handmade.rs"
-crate-type = ["lib", "cdylib"] #cdylib to make handmade.rs callable from C 
+crate-type = ["rlib", "cdylib"] #cdylib to make handmade.rs callable from C 
 
 [[bin]]
 name = "win32_handmade"
 path = "src/win32_handmade.rs"
+
+[profile.dev]
+opt-level = 3 # optimize dev builds needed to match hh performance 

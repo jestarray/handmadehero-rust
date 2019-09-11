@@ -5,6 +5,7 @@ use core::arch::x86_64::_rdtsc;
 use handmade::*;
 use std::ffi::CString;
 use std::mem::transmute;
+use std::str::from_utf8;
 use std::{
     convert::TryInto,
     ffi::OsStr,
@@ -16,9 +17,13 @@ use std::{
 use winapi::ctypes::c_void;
 use winapi::shared::guiddef::LPCGUID;
 use winapi::shared::minwindef::DWORD;
+use winapi::shared::minwindef::FALSE;
+use winapi::shared::minwindef::FILETIME;
 use winapi::shared::minwindef::HMODULE;
+use winapi::shared::minwindef::MAX_PATH;
 use winapi::shared::mmreg::WAVEFORMATEX;
 use winapi::shared::mmreg::WAVE_FORMAT_PCM;
+use winapi::shared::ntdef::HRESULT;
 use winapi::shared::ntdef::SHORT;
 use winapi::shared::winerror::ERROR_DEVICE_NOT_CONNECTED;
 use winapi::shared::winerror::SUCCEEDED;
@@ -30,7 +35,10 @@ use winapi::um::dsound::DSSCL_PRIORITY;
 use winapi::um::dsound::DS_OK;
 use winapi::um::dsound::LPDIRECTSOUND;
 use winapi::um::dsound::LPDIRECTSOUNDBUFFER;
+use winapi::um::fileapi::CompareFileTime;
 use winapi::um::fileapi::CreateFileA;
+use winapi::um::fileapi::FindClose;
+use winapi::um::fileapi::FindFirstFileA;
 use winapi::um::fileapi::GetFileSizeEx;
 use winapi::um::fileapi::ReadFile;
 use winapi::um::fileapi::WriteFile;
@@ -39,35 +47,36 @@ use winapi::um::fileapi::OPEN_EXISTING;
 use winapi::um::handleapi::CloseHandle;
 use winapi::um::handleapi::INVALID_HANDLE_VALUE;
 use winapi::um::libloaderapi::FreeLibrary;
+use winapi::um::libloaderapi::GetModuleFileNameA;
 use winapi::um::libloaderapi::GetModuleHandleW;
 use winapi::um::libloaderapi::GetProcAddress;
 use winapi::um::libloaderapi::LoadLibraryA;
 use winapi::um::memoryapi::VirtualAlloc;
 use winapi::um::memoryapi::VirtualFree;
+use winapi::um::minwinbase::WIN32_FIND_DATAA;
+use winapi::um::mmsystem::TIMERR_NOERROR;
+use winapi::um::profileapi::QueryPerformanceCounter;
 use winapi::um::profileapi::QueryPerformanceFrequency;
 use winapi::um::synchapi::Sleep;
+use winapi::um::timeapi::timeBeginPeriod;
+use winapi::um::unknwnbase::LPUNKNOWN;
+use winapi::um::winbase::CopyFileA;
 use winapi::um::winnt::FILE_SHARE_READ;
 use winapi::um::winnt::GENERIC_READ;
 use winapi::um::winnt::GENERIC_WRITE;
 use winapi::um::winnt::LARGE_INTEGER;
 use winapi::um::winnt::MEM_RESERVE;
 use winapi::um::winnt::PF_RDTSC_INSTRUCTION_AVAILABLE;
-use winapi::um::winuser::MessageBoxA;
-use winapi::um::winuser::ReleaseDC;
-use winapi::um::xinput::XINPUT_STATE;
-use winapi::um::xinput::XINPUT_VIBRATION;
-use winapi::um::xinput::XUSER_MAX_COUNT;
-
-use winapi::shared::ntdef::HRESULT;
-use winapi::um::mmsystem::TIMERR_NOERROR;
-use winapi::um::profileapi::QueryPerformanceCounter;
-use winapi::um::timeapi::timeBeginPeriod;
-use winapi::um::unknwnbase::LPUNKNOWN;
 use winapi::um::winuser::GetDC;
+use winapi::um::winuser::MessageBoxA;
 use winapi::um::winuser::PeekMessageW;
+use winapi::um::winuser::ReleaseDC;
 use winapi::um::winuser::PM_REMOVE;
 use winapi::um::winuser::WM_QUIT;
 use winapi::um::xinput::XINPUT_GAMEPAD_LEFT_THUMB_DEADZONE;
+use winapi::um::xinput::XINPUT_STATE;
+use winapi::um::xinput::XINPUT_VIBRATION;
+use winapi::um::xinput::XUSER_MAX_COUNT;
 use winapi::{
     shared::{
         minwindef::{HINSTANCE, LPARAM, LRESULT, UINT, WPARAM},
@@ -143,8 +152,6 @@ pub unsafe fn debug_platform_read_entire_file(file_name: &str) -> DebugReadFile 
         0,
         null_mut(),
     );
-
-    println!("THE FILE H VALUE : {:#?}", file_handle);
 
     if file_handle != INVALID_HANDLE_VALUE {
         let mut file_size = zeroed::<LARGE_INTEGER>();
@@ -450,36 +457,58 @@ struct Win32GameCode {
     update_and_render: GameUpdateAndRender,
     get_sound_samples: GameGetSoundSamples,
     is_valid: bool,
+    dll_last_write_time: FILETIME,
 }
 
-unsafe fn win32_load_game_code() -> Win32GameCode {
-    let game_code_dll = LoadLibraryA(cstring!("handmade.dll").as_ptr());
+unsafe fn win32_get_last_write_time(file_name: &str) -> FILETIME {
+    let mut last_write_time = zeroed::<FILETIME>();
+    let mut find_data = zeroed::<WIN32_FIND_DATAA>();
+    let name = cstring!(file_name);
+    let find_handle = FindFirstFileA(name.as_ptr(), &mut find_data);
+    if find_handle != INVALID_HANDLE_VALUE {
+        last_write_time = find_data.ftLastWriteTime;
+        FindClose(find_handle);
+    }
+    return last_write_time;
+}
 
-    let mut game_code = Win32GameCode {
-        game_code_dll,
+unsafe fn win32_load_game_code(source_dll_name: &str, tmp_dll_name: &str) -> Win32GameCode {
+    let source_name = cstring!(source_dll_name);
+    let temp_name = cstring!(tmp_dll_name);
+    if CopyFileA(source_name.as_ptr(), temp_name.as_ptr(), FALSE) != 0 {
+        println!("FILE COPY SUCESS");
+    } else {
+        println!("FILE COPY FAIL");
+    }
+    let mut result = Win32GameCode {
+        game_code_dll: LoadLibraryA(temp_name.as_ptr()),
         update_and_render: game_update_and_render,
         get_sound_samples: GameGetSoundSamples,
         is_valid: false,
+        dll_last_write_time: win32_get_last_write_time(source_dll_name),
     };
 
-    if game_code_dll != null_mut() {
+    if result.game_code_dll != null_mut() {
+        let game_update_and_render = cstring!("game_update_and_render");
         let update = transmute(GetProcAddress(
-            game_code_dll,
-            cstring!("game_update_and_render").as_ptr(),
+            result.game_code_dll,
+            game_update_and_render.as_ptr(),
         ));
 
+        let game_get_sound_samples = cstring!("GameGetSoundSamples");
+
         let get_sound_samples = transmute(GetProcAddress(
-            game_code_dll,
-            cstring!("GameGetSoundSamples").as_ptr(),
+            result.game_code_dll,
+            game_get_sound_samples.as_ptr(),
         ));
-        game_code.update_and_render = update;
-        game_code.get_sound_samples = get_sound_samples;
+        result.update_and_render = update;
+        result.get_sound_samples = get_sound_samples;
         println!("LOADED DLL SUCESSFULLY");
-        game_code.is_valid = true;
+        result.is_valid = true;
     } else {
         println!("FAILED TO LOAD GAMECODE");
     }
-    game_code
+    result
 }
 unsafe fn win32_unload_game_code(game_code: &mut Win32GameCode) {
     if game_code.game_code_dll != null_mut() {
@@ -503,29 +532,35 @@ extern "system" fn xinput_set_state_stub(_: DWORD, _: *mut XINPUT_VIBRATION) -> 
 static mut XINPUT_SET_STATE: XInputSetStateFn = xinput_set_state_stub;
 
 unsafe fn win32_load_xinput() {
-    let mut library = LoadLibraryA(cstring!("xinput1_4.dll").as_ptr());
+    let xinput1_4 = cstring!("xinput1_4.dll");
+    let mut library = LoadLibraryA(xinput1_4.as_ptr());
     if library == 0 as HINSTANCE {
-        library = LoadLibraryA(cstring!("xinput9_1_0.dll").as_ptr());
+        let xinput9_1_0 = cstring!("xinput9_1_0.dll");
+        library = LoadLibraryA(xinput9_1_0.as_ptr());
     }
     if library == 0 as HINSTANCE {
-        library = LoadLibraryA(cstring!("xinput1_3.dll").as_ptr());
+        let xinput1_3 = cstring!("xinput1_3.dll");
+        library = LoadLibraryA(xinput1_3.as_ptr());
     }
 
     if library != 0 as HINSTANCE {
-        XInputGetState = transmute(GetProcAddress(library, cstring!("XInputGetState").as_ptr()));
-        XINPUT_SET_STATE = transmute(GetProcAddress(library, cstring!("XInputSetState").as_ptr()));
+        let xinput_get_state_str = cstring!("XInputGetState");
+        XInputGetState = transmute(GetProcAddress(library, xinput_get_state_str.as_ptr()));
+        let xinput_set_state_str = cstring!("XInputSetState");
+        XINPUT_SET_STATE = transmute(GetProcAddress(library, xinput_set_state_str.as_ptr()));
     }
 }
 
 type DirectSoundCreateFn = fn(LPCGUID, *mut LPDIRECTSOUND, LPUNKNOWN) -> HRESULT;
 unsafe fn win32_init_dsound(window: HWND, samples_per_sec: u32, buffersize: i32) {
-    let d_sound_library = LoadLibraryA(cstring!("dsound.dll").as_ptr());
+    let dsound_str = cstring!("dsound.dll");
+    let d_sound_library = LoadLibraryA(dsound_str.as_ptr());
 
     let mut direct_sound = zeroed::<LPDIRECTSOUND>();
 
     if d_sound_library != null_mut() {
-        let direct_sound_create_ptr =
-            GetProcAddress(d_sound_library, cstring!("DirectSoundCreate").as_ptr());
+        let dsoundcrate_str = cstring!("DirectSoundCreate");
+        let direct_sound_create_ptr = GetProcAddress(d_sound_library, dsoundcrate_str.as_ptr());
         let DirectSoundCreate: DirectSoundCreateFn = transmute(direct_sound_create_ptr);
 
         if direct_sound_create_ptr != null_mut()
@@ -918,14 +953,57 @@ unsafe fn win32_get_wall_clock() -> LARGE_INTEGER {
 unsafe fn win32_get_seconds_elasped(start: LARGE_INTEGER, end: LARGE_INTEGER) -> f32 {
     ((end.QuadPart() - start.QuadPart()) as f32 / PERF_COUNT_FREQUENCY as f32) //as f32, moving cast out here drastically changes value. look into why
 }
-
 fn main() {
     unsafe {
         winmain();
     }
 }
+
 pub unsafe extern "system" fn winmain() {
-    let game_code = win32_load_game_code();
+    let mut exe_file_name: [u8; MAX_PATH] = ['\0' as u8; MAX_PATH];
+    let size_of_file_name = GetModuleFileNameA(
+        0 as HMODULE,
+        exe_file_name.as_mut_ptr() as *mut i8,
+        size_of::<[char; MAX_PATH]>().try_into().unwrap(),
+    );
+
+    let mut limit = 0;
+    let mut one_past_last_slash = &exe_file_name[..limit];
+    for (index, scan) in exe_file_name.iter().enumerate() {
+        match *scan as char {
+            '\\' => {
+                limit = index + 1;
+            }
+            '\0' => {
+                //let exe_path = String::from_utf8_lossy(&exe_file_name[..limit]);
+                one_past_last_slash = &exe_file_name[..limit];
+                //dbg!(one_past_last_slash);
+            }
+            _ => {}
+        }
+    } /*
+      let mut one_past_last_slash = exe_file_name.as_mut_ptr();
+      for scan in exe_file_name.iter() {
+          let m = *scan as u8 as char;
+          if m == '\\' {
+              one_past_last_slash = (scan as *const u8).offset(1) as *mut u8;
+              dbg!(*one_past_last_slash as u8 as char);
+          } else if m == '\0' {
+              break;
+          }
+      } */
+
+    //catstrings replaced with std
+    let source_game_code_dll_file_name = "handmade.dll".as_bytes();
+    let sp = &[one_past_last_slash, source_game_code_dll_file_name].concat();
+    let source_game_code_dll_file_name_full_path = from_utf8(sp).unwrap();
+
+    let temp_game_code_dll_file_name = "handmade_temp.dll".as_bytes();
+    let tp = &[one_past_last_slash, temp_game_code_dll_file_name].concat();
+    let temp_game_code_dll_full_path = from_utf8(tp).unwrap();
+    /*     dbg!(&source_game_code_dll_file_name_full_path);
+    dbg!(&temp_game_code_dll_full_path);; */
+
     let mut perfcounter_frequency_result = zeroed::<LARGE_INTEGER>();
     QueryPerformanceFrequency(&mut perfcounter_frequency_result);
     PERF_COUNT_FREQUENCY = *perfcounter_frequency_result.QuadPart();
@@ -1043,8 +1121,23 @@ pub unsafe extern "system" fn winmain() {
                     let AudioLatencySeconds: f32 = 0.0;
                     let mut SoundIsValid = false;
 
+                    let mut game = win32_load_game_code(
+                        source_game_code_dll_file_name_full_path,
+                        temp_game_code_dll_full_path,
+                    );
                     let mut last_cycle_count = _rdtsc();
                     while RUNNING {
+                        let new_dll_write_time =
+                            win32_get_last_write_time(source_game_code_dll_file_name_full_path);
+                        if CompareFileTime(&new_dll_write_time, &game.dll_last_write_time) != 0 {
+                            println!("RELOADING THE DLL");
+                            win32_unload_game_code(&mut game);
+                            game = win32_load_game_code(
+                                source_game_code_dll_file_name_full_path,
+                                temp_game_code_dll_full_path,
+                            );
+                        }
+
                         let old_keyboard_controller: &mut GameControllerInput =
                             &mut old_input.controllers[0 as usize];
                         let mut new_keyboard_controller: &mut GameControllerInput =
@@ -1234,11 +1327,7 @@ pub unsafe extern "system" fn winmain() {
                             width: GLOBAL_BACKBUFFER.width,
                             pitch: GLOBAL_BACKBUFFER.pitch,
                         };
-                        (game_code.update_and_render)(
-                            &mut game_memory,
-                            &mut new_input,
-                            &mut buffer,
-                        );
+                        (game.update_and_render)(&mut game_memory, &mut new_input, &mut buffer);
 
                         let AudioWallClock = win32_get_wall_clock();
                         let FromBeginToAudioSeconds =
@@ -1303,7 +1392,7 @@ pub unsafe extern "system" fn winmain() {
                                 SampleCount: BytesToWrite / SoundOutput.BytesPerSample,
                                 samples: samples,
                             };
-                            (game_code.get_sound_samples)(&mut game_memory, &mut SoundBuffer);
+                            (game.get_sound_samples)(&mut game_memory, &mut SoundBuffer);
 
                             /*
 
@@ -1417,10 +1506,10 @@ pub unsafe extern "system" fn winmain() {
 
                         let fps = 0.0;
                         let mcpf: i32 = cycles_elapsed as i32 / (1000 * 1000);
-                        println!(
+                        /* println!(
                             "{:#?} ms, the fps is : {:#?}, cycles {:#?}",
                             ms_per_frame, fps, mcpf
-                        );
+                        ); */
 
                         #[cfg(feature = "handmade_internal")]
                         {
