@@ -283,7 +283,7 @@ struct win32_state<'a> {
 
     PlaybackHandle: HANDLE,
     InputPlayingIndex: i32,
-    exe_file_name: &'a [u8],
+    exe_file_name: &'a [u8; MAX_PATH],
     one_past_last_slash: &'a [u8],
 }
 
@@ -486,15 +486,14 @@ struct Win32GameCode {
 unsafe fn win32_get_last_write_time(file_name: &str) -> FILETIME {
     let mut last_write_time = zeroed::<FILETIME>();
     let name = cstring!(file_name);
-    /*    let mut find_data = zeroed::<WIN32_FIND_DATAA>();
+    let mut find_data = zeroed::<WIN32_FIND_DATAA>();
     let find_handle = FindFirstFileA(name.as_ptr(), &mut find_data);
     if find_handle != INVALID_HANDLE_VALUE {
         last_write_time = find_data.ftLastWriteTime;
         FindClose(find_handle);
-    } */
-
+    }
     //FAILING AT COPYING THE FILE BECAUSE OF CALL TO GETFILEATTRIBUTES?
-    let mut data = zeroed::<WIN32_FILE_ATTRIBUTE_DATA>();
+    /*  let mut data = zeroed::<WIN32_FILE_ATTRIBUTE_DATA>();
     if GetFileAttributesExA(
         name.as_ptr(),
         GetFileExInfoStandard,
@@ -502,15 +501,13 @@ unsafe fn win32_get_last_write_time(file_name: &str) -> FILETIME {
     ) != 0
     {
         last_write_time = data.ftLastWriteTime;
-    }
+    } */
     return last_write_time;
 }
 
 unsafe fn win32_load_game_code(source_dll_name: &str, tmp_dll_name: &str) -> Win32GameCode {
     let source_name = cstring!(source_dll_name);
     let temp_name = cstring!(tmp_dll_name);
-    dbg!(&source_name);
-    dbg!(&tmp_dll_name);
     let mut result = Win32GameCode {
         game_code_dll: 0 as HMODULE,
         update_and_render: game_update_and_render,
@@ -521,6 +518,9 @@ unsafe fn win32_load_game_code(source_dll_name: &str, tmp_dll_name: &str) -> Win
     if CopyFileA(source_name.as_ptr(), temp_name.as_ptr(), FALSE) != 0 {
         println!("FILE COPY SUCESS");
     } else {
+        /* use winapi::um::errhandlingapi::GetLastError;
+        let x = GetLastError();
+        dbg!(x); */
         println!("FILE COPY FAIL");
     }
 
@@ -796,14 +796,19 @@ fn win32_update_window(
     }
 }
 
-unsafe fn Win32BeginRecordingInput(Win32State: &mut win32_state, InputRecordingIndex: i32) {
-    Win32State.InputRecordingIndex = InputRecordingIndex;
-    // TODO(casey): These files must go in a temporary/build directory!!!!
+fn Win32GetInputFileLocation(State: &win32_state, Dest: &mut [u8]) {
+    Win32BuildEXEPathFileName(State, b"loop_edit.hmi", Dest);
+}
+
+unsafe fn Win32BeginRecordingInput(State: &mut win32_state, InputRecordingIndex: i32) {
+    State.InputRecordingIndex = InputRecordingIndex;
     // TODO(casey): Lazily write the giant memory block and use a memory copy instead?
 
-    let file_name = cstring!("foo.hmi");
-    Win32State.RecordingHandle = CreateFileA(
-        file_name.as_ptr(),
+    //let file_name = cstring!("foo.hmi");
+    let mut file_name = ['\0' as u8; MAX_PATH];
+    Win32GetInputFileLocation(State, &mut file_name);
+    State.RecordingHandle = CreateFileA(
+        file_name.as_ptr() as *const i8,
         GENERIC_WRITE,
         0,
         null_mut(),
@@ -812,27 +817,28 @@ unsafe fn Win32BeginRecordingInput(Win32State: &mut win32_state, InputRecordingI
         null_mut(),
     );
 
-    let BytesToWrite = Win32State.TotalSize as DWORD;
+    let BytesToWrite = State.TotalSize as DWORD;
     let mut BytesWritten = 0;
     WriteFile(
-        Win32State.RecordingHandle,
-        Win32State.GameMemoryBlock,
+        State.RecordingHandle,
+        State.GameMemoryBlock,
         BytesToWrite,
         &mut BytesWritten,
         null_mut(),
     );
 }
 
-unsafe fn Win32EndRecordingInput(Win32State: &mut win32_state) {
-    CloseHandle(Win32State.RecordingHandle);
-    Win32State.InputRecordingIndex = 0;
+unsafe fn Win32EndRecordingInput(State: &mut win32_state) {
+    CloseHandle(State.RecordingHandle);
+    State.InputRecordingIndex = 0;
 }
 
-unsafe fn Win32BeginInputPlayBack(Win32State: &mut win32_state, InputPlayingIndex: i32) {
-    Win32State.InputPlayingIndex = InputPlayingIndex;
-    let FileName = cstring!("foo.hmi");
-    Win32State.PlaybackHandle = CreateFileA(
-        FileName.as_ptr(),
+unsafe fn Win32BeginInputPlayBack(State: &mut win32_state, InputPlayingIndex: i32) {
+    State.InputPlayingIndex = InputPlayingIndex;
+    let mut FileName = ['\0' as u8; MAX_PATH];
+    Win32GetInputFileLocation(State, &mut FileName);
+    State.PlaybackHandle = CreateFileA(
+        FileName.as_ptr() as *const i8,
         GENERIC_READ,
         FILE_SHARE_READ,
         null_mut(),
@@ -841,26 +847,26 @@ unsafe fn Win32BeginInputPlayBack(Win32State: &mut win32_state, InputPlayingInde
         null_mut(),
     );
 
-    let BytesToRead = Win32State.TotalSize as DWORD;
+    let BytesToRead = State.TotalSize as DWORD;
     let mut BytesRead = 0;
     ReadFile(
-        Win32State.PlaybackHandle,
-        Win32State.GameMemoryBlock,
+        State.PlaybackHandle,
+        State.GameMemoryBlock,
         BytesToRead,
         &mut BytesRead,
         null_mut(),
     );
 }
 
-unsafe fn Win32EndInputPlayBack(Win32State: &mut win32_state) {
-    CloseHandle(Win32State.PlaybackHandle);
-    Win32State.InputPlayingIndex = 0;
+unsafe fn Win32EndInputPlayBack(State: &mut win32_state) {
+    CloseHandle(State.PlaybackHandle);
+    State.InputPlayingIndex = 0;
 }
 
-unsafe fn Win32RecordInput(Win32State: &mut win32_state, NewInput: &mut GameInput) {
+unsafe fn Win32RecordInput(State: &mut win32_state, NewInput: &mut GameInput) {
     let mut BytesWritten = 0;
     WriteFile(
-        Win32State.RecordingHandle,
+        State.RecordingHandle,
         NewInput as *mut GameInput as *mut c_void,
         size_of::<GameInput>().try_into().unwrap(),
         &mut BytesWritten,
@@ -868,10 +874,10 @@ unsafe fn Win32RecordInput(Win32State: &mut win32_state, NewInput: &mut GameInpu
     );
 }
 
-unsafe fn Win32PlayBackInput(Win32State: &mut win32_state, NewInput: &mut GameInput) {
+unsafe fn Win32PlayBackInput(State: &mut win32_state, NewInput: &mut GameInput) {
     let mut BytesRead = 0;
     if ReadFile(
-        Win32State.PlaybackHandle,
+        State.PlaybackHandle,
         NewInput as *mut GameInput as *mut c_void,
         size_of::<GameInput>().try_into().unwrap(),
         &mut BytesRead,
@@ -880,11 +886,11 @@ unsafe fn Win32PlayBackInput(Win32State: &mut win32_state, NewInput: &mut GameIn
     {
         if (BytesRead == 0) {
             // NOTE(casey): We've hit the end of the stream, go back to the beginning
-            let PlayingIndex = Win32State.InputPlayingIndex;
-            Win32EndInputPlayBack(Win32State);
-            Win32BeginInputPlayBack(Win32State, PlayingIndex);
+            let PlayingIndex = State.InputPlayingIndex;
+            Win32EndInputPlayBack(State);
+            Win32BeginInputPlayBack(State, PlayingIndex);
             ReadFile(
-                Win32State.PlaybackHandle,
+                State.PlaybackHandle,
                 NewInput as *mut GameInput as *mut c_void,
                 size_of::<GameInput>().try_into().unwrap(),
                 &mut BytesRead,
@@ -895,7 +901,7 @@ unsafe fn Win32PlayBackInput(Win32State: &mut win32_state, NewInput: &mut GameIn
 }
 
 unsafe fn win32_process_pending_messages(
-    Win32State: &mut win32_state,
+    State: &mut win32_state,
     keyboard_controller: &mut GameControllerInput,
 ) {
     let mut message = zeroed::<MSG>();
@@ -951,11 +957,11 @@ unsafe fn win32_process_pending_messages(
                         }
                         'L' => {
                             if is_down {
-                                if Win32State.InputRecordingIndex == 0 {
-                                    Win32BeginRecordingInput(Win32State, 1);
+                                if State.InputRecordingIndex == 0 {
+                                    Win32BeginRecordingInput(State, 1);
                                 } else {
-                                    Win32EndRecordingInput(Win32State);
-                                    Win32BeginInputPlayBack(Win32State, 1);
+                                    Win32EndRecordingInput(State);
+                                    Win32BeginInputPlayBack(State, 1);
                                 }
                             }
                         }
@@ -1038,11 +1044,11 @@ unsafe extern "system" fn win32_main_window_callback(
             0
         }
         WM_ACTIVATEAPP => {
-            if wparam == TRUE.try_into().unwrap() {
+            /*  if wparam == TRUE.try_into().unwrap() {
                 SetLayeredWindowAttributes(window, RGB(0, 0, 0), 255, LWA_ALPHA);
             } else {
                 SetLayeredWindowAttributes(window, RGB(0, 0, 0), 64, LWA_ALPHA);
-            }
+            } */
             0
         }
         WM_DESTROY => {
@@ -1116,7 +1122,17 @@ fn main() {
     }
 }
 
+fn Win32BuildEXEPathFileName(State: &win32_state, FileName: &[u8], Dest: &mut [u8]) {
+    CatStrings(State.one_past_last_slash, FileName, Dest);
+}
+
+fn CatStrings(source_a: &[u8], source_b: &[u8], dest: &mut [u8]) {
+    //trim 260 null chars?
+    dest[..source_a.len()].copy_from_slice(source_a);
+    dest[source_a.len()..source_a.len() + source_b.len()].copy_from_slice(source_b);
+}
 pub unsafe extern "system" fn winmain() {
+    //Win32GetEXEFileName HERE. (SKIPPED TO AVOID MUTABLE REF ON WIN32_STATE)
     let mut exe_file_name: [u8; MAX_PATH] = ['\0' as u8; MAX_PATH];
     let size_of_file_name = GetModuleFileNameA(
         0 as HMODULE,
@@ -1132,34 +1148,40 @@ pub unsafe extern "system" fn winmain() {
                 limit = index + 1;
             }
             '\0' => {
-                //let exe_path = String::from_utf8_lossy(&exe_file_name[..limit]);
                 one_past_last_slash = &exe_file_name[..limit];
-                //dbg!(one_past_last_slash);
             }
             _ => {}
         }
-    } /*
-      let mut one_past_last_slash = exe_file_name.as_mut_ptr();
-      for scan in exe_file_name.iter() {
-          let m = *scan as u8 as char;
-          if m == '\\' {
-              one_past_last_slash = (scan as *const u8).offset(1) as *mut u8;
-              dbg!(*one_past_last_slash as u8 as char);
-          } else if m == '\0' {
-              break;
-          }
-      } */
+    }
+    //win32getexefilename end
 
-    //catstrings replaced with std
-    let source_game_code_dll_file_name = "handmade.dll".as_bytes();
-    let sp = &[one_past_last_slash, source_game_code_dll_file_name].concat();
-    let source_game_code_dll_file_name_full_path = from_utf8(sp).unwrap();
+    let mut State = win32_state {
+        GameMemoryBlock: null_mut(),
+        InputPlayingIndex: 0,
+        InputRecordingIndex: 0,
+        PlaybackHandle: null_mut(),
+        RecordingHandle: null_mut(),
+        TotalSize: 0,
+        exe_file_name: &exe_file_name,
+        one_past_last_slash: one_past_last_slash,
+    };
 
-    let temp_game_code_dll_file_name = "handmade_temp.dll".as_bytes();
-    let tp = &[one_past_last_slash, temp_game_code_dll_file_name].concat();
+    /*
+    let mut one_past_last_slash = exe_file_name.as_mut_ptr();
+    for scan in exe_file_name.iter() {
+        let m = *scan as u8 as char;
+        if m == '\\' {
+            one_past_last_slash = (scan as *const u8).offset(1) as *mut u8;
+            dbg!(*one_past_last_slash as u8 as char);
+        } else if m == '\0' {
+            break;
+        }
+    } */
+    let sp = [one_past_last_slash, b"handmade.dll"].concat();
+    let source_game_code_dll_file_name_full_path = from_utf8(&sp).unwrap();
+
+    let tp = &[one_past_last_slash, b"handmade_temp.dll"].concat();
     let temp_game_code_dll_full_path = from_utf8(tp).unwrap();
-    /*     dbg!(&source_game_code_dll_file_name_full_path);
-    dbg!(&temp_game_code_dll_full_path);; */
 
     let mut perfcounter_frequency_result = zeroed::<LARGE_INTEGER>();
     QueryPerformanceFrequency(&mut perfcounter_frequency_result);
@@ -1193,7 +1215,7 @@ pub unsafe extern "system" fn winmain() {
     match RegisterClassW(&wnd_class) {
         _atom => {
             let window = CreateWindowExW(
-                WS_EX_TOPMOST | WS_EX_LAYERED,
+                0, //WS_EX_TOPMOST | WS_EX_LAYERED,
                 name.as_ptr(),
                 title.as_ptr(),
                 WS_OVERLAPPEDWINDOW | WS_VISIBLE,
@@ -1228,16 +1250,6 @@ pub unsafe extern "system" fn winmain() {
 
                 (*GLOBAL_SECONDARY_BUFFER).Play(0, 0, DSBPLAY_LOOPING);
 
-                let mut Win32State = win32_state {
-                    GameMemoryBlock: null_mut(),
-                    InputPlayingIndex: 0,
-                    InputRecordingIndex: 0,
-                    PlaybackHandle: null_mut(),
-                    RecordingHandle: null_mut(),
-                    TotalSize: 0,
-                    exe_file_name: &exe_file_name,
-                    one_past_last_slash: one_past_last_slash,
-                };
                 RUNNING = true;
 
                 let samples = VirtualAlloc(
@@ -1266,15 +1278,15 @@ pub unsafe extern "system" fn winmain() {
                     debug_platform_write_entire_file,
                 };
 
-                Win32State.TotalSize =
+                State.TotalSize =
                     game_memory.permanent_storage_size * game_memory.transient_storage_size;
-                Win32State.GameMemoryBlock = VirtualAlloc(
+                State.GameMemoryBlock = VirtualAlloc(
                     base_address,
-                    Win32State.TotalSize as usize,
+                    State.TotalSize as usize,
                     MEM_RESERVE | MEM_COMMIT,
                     PAGE_READWRITE,
                 );
-                game_memory.permanent_storage = Win32State.GameMemoryBlock as *mut std::ffi::c_void;
+                game_memory.permanent_storage = State.GameMemoryBlock as *mut std::ffi::c_void;
 
                 game_memory.permanent_storage = VirtualAlloc(
                     null_mut(),
@@ -1333,10 +1345,7 @@ pub unsafe extern "system" fn winmain() {
                                 old_keyboard_controller.buttons[button_index].ended_down;
                         }
 
-                        win32_process_pending_messages(
-                            &mut Win32State,
-                            &mut new_keyboard_controller,
-                        );
+                        win32_process_pending_messages(&mut State, &mut new_keyboard_controller);
 
                         if !GlobalPause {
                             let mut max_controller_count = XUSER_MAX_COUNT;
@@ -1518,12 +1527,12 @@ pub unsafe extern "system" fn winmain() {
                                 bytes_per_pixel: GLOBAL_BACKBUFFER.bytes_per_pixel,
                             };
 
-                            if Win32State.InputRecordingIndex != 0 {
-                                Win32RecordInput(&mut Win32State, &mut new_input);
+                            if State.InputRecordingIndex != 0 {
+                                Win32RecordInput(&mut State, &mut new_input);
                             }
 
-                            if Win32State.InputPlayingIndex != 0 {
-                                Win32PlayBackInput(&mut Win32State, &mut new_input);
+                            if State.InputPlayingIndex != 0 {
+                                Win32PlayBackInput(&mut State, &mut new_input);
                             }
 
                             (game.update_and_render)(&mut game_memory, &mut new_input, &mut buffer);
