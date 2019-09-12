@@ -262,7 +262,7 @@ unsafe fn render_weird_gradient(
     for y in 0..buffer.height {
         let mut pixel = row as *mut [u8; 4]; //array of 4, u8s
         for x in 0..buffer.width {
-            *pixel = [(x + blue_offset) as u8, (y + green_offset) as u8, 20, 0];
+            *pixel = [(x + blue_offset) as u8, (y + green_offset) as u8, 0, 0];
             pixel = pixel.offset(1); // adds sizeof(pixel), 4
         }
         row = row.offset(buffer.pitch as isize);

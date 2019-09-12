@@ -41,11 +41,13 @@ use winapi::um::fileapi::CompareFileTime;
 use winapi::um::fileapi::CreateFileA;
 use winapi::um::fileapi::FindClose;
 use winapi::um::fileapi::FindFirstFileA;
+use winapi::um::fileapi::GetFileAttributesExA;
 use winapi::um::fileapi::GetFileSizeEx;
 use winapi::um::fileapi::ReadFile;
 use winapi::um::fileapi::WriteFile;
 use winapi::um::fileapi::CREATE_ALWAYS;
 use winapi::um::fileapi::OPEN_EXISTING;
+use winapi::um::fileapi::WIN32_FILE_ATTRIBUTE_DATA;
 use winapi::um::handleapi::CloseHandle;
 use winapi::um::handleapi::INVALID_HANDLE_VALUE;
 use winapi::um::libloaderapi::FreeLibrary;
@@ -55,6 +57,7 @@ use winapi::um::libloaderapi::GetProcAddress;
 use winapi::um::libloaderapi::LoadLibraryA;
 use winapi::um::memoryapi::VirtualAlloc;
 use winapi::um::memoryapi::VirtualFree;
+use winapi::um::minwinbase::GetFileExInfoStandard;
 use winapi::um::minwinbase::WIN32_FIND_DATAA;
 use winapi::um::mmsystem::TIMERR_NOERROR;
 use winapi::um::profileapi::QueryPerformanceCounter;
@@ -272,7 +275,7 @@ struct Win32WindowDimension {
     height: i32,
 }
 
-struct win32_state {
+struct win32_state<'a> {
     TotalSize: u64,
     GameMemoryBlock: *mut c_void,
     RecordingHandle: HANDLE,
@@ -280,6 +283,8 @@ struct win32_state {
 
     PlaybackHandle: HANDLE,
     InputPlayingIndex: i32,
+    exe_file_name: &'a [u8],
+    one_past_last_slash: &'a [u8],
 }
 
 fn win32_get_window_dimension(window: HWND) -> Win32WindowDimension {
@@ -480,12 +485,23 @@ struct Win32GameCode {
 
 unsafe fn win32_get_last_write_time(file_name: &str) -> FILETIME {
     let mut last_write_time = zeroed::<FILETIME>();
-    let mut find_data = zeroed::<WIN32_FIND_DATAA>();
     let name = cstring!(file_name);
+    /*    let mut find_data = zeroed::<WIN32_FIND_DATAA>();
     let find_handle = FindFirstFileA(name.as_ptr(), &mut find_data);
     if find_handle != INVALID_HANDLE_VALUE {
         last_write_time = find_data.ftLastWriteTime;
         FindClose(find_handle);
+    } */
+
+    //FAILING AT COPYING THE FILE BECAUSE OF CALL TO GETFILEATTRIBUTES?
+    let mut data = zeroed::<WIN32_FILE_ATTRIBUTE_DATA>();
+    if GetFileAttributesExA(
+        name.as_ptr(),
+        GetFileExInfoStandard,
+        &mut data as *mut WIN32_FILE_ATTRIBUTE_DATA as *mut c_void,
+    ) != 0
+    {
+        last_write_time = data.ftLastWriteTime;
     }
     return last_write_time;
 }
@@ -493,18 +509,22 @@ unsafe fn win32_get_last_write_time(file_name: &str) -> FILETIME {
 unsafe fn win32_load_game_code(source_dll_name: &str, tmp_dll_name: &str) -> Win32GameCode {
     let source_name = cstring!(source_dll_name);
     let temp_name = cstring!(tmp_dll_name);
-    if CopyFileA(source_name.as_ptr(), temp_name.as_ptr(), FALSE) != 0 {
-        println!("FILE COPY SUCESS");
-    } else {
-        println!("FILE COPY FAIL");
-    }
+    dbg!(&source_name);
+    dbg!(&tmp_dll_name);
     let mut result = Win32GameCode {
-        game_code_dll: LoadLibraryA(temp_name.as_ptr()),
+        game_code_dll: 0 as HMODULE,
         update_and_render: game_update_and_render,
         get_sound_samples: GameGetSoundSamples,
         is_valid: false,
         dll_last_write_time: win32_get_last_write_time(source_dll_name),
     };
+    if CopyFileA(source_name.as_ptr(), temp_name.as_ptr(), FALSE) != 0 {
+        println!("FILE COPY SUCESS");
+    } else {
+        println!("FILE COPY FAIL");
+    }
+
+    result.game_code_dll = LoadLibraryA(temp_name.as_ptr());
 
     if result.game_code_dll != null_mut() {
         let game_update_and_render = cstring!("game_update_and_render");
@@ -748,7 +768,6 @@ fn win32_resize_dibsection(buffer: &mut Win32OffScreenBuffer, width: i32, height
             PAGE_READWRITE,
         )
     };
-    //unsafe { render_weird_gradient(&buffer, 1280, 0) }
 }
 
 fn win32_update_window(
@@ -758,12 +777,13 @@ fn win32_update_window(
     buffer: &Win32OffScreenBuffer,
 ) {
     unsafe {
+        //blit 1 to 1 for learning how to code renderer, no scaling
         StretchDIBits(
             device_context,
             0,
             0,
-            window_width,
-            window_height,
+            buffer.width,
+            buffer.height,
             0,
             0,
             buffer.width,
@@ -1215,6 +1235,8 @@ pub unsafe extern "system" fn winmain() {
                     PlaybackHandle: null_mut(),
                     RecordingHandle: null_mut(),
                     TotalSize: 0,
+                    exe_file_name: &exe_file_name,
+                    one_past_last_slash: one_past_last_slash,
                 };
                 RUNNING = true;
 
@@ -1335,6 +1357,8 @@ pub unsafe extern "system" fn winmain() {
                                     == winapi::shared::winerror::ERROR_SUCCESS
                                 {
                                     new_controller.is_connected = true as i32;
+                                    new_controller.is_analog = old_controller.is_analog;
+
                                     let pad = &controller_state.Gamepad;
 
                                     let up =
@@ -1485,220 +1509,226 @@ pub unsafe extern "system" fn winmain() {
                                     new_controller.is_connected = false as i32;
                                 }
                             }
-                        }
-                        let mut buffer = GameOffScreenBuffer {
-                            memory: GLOBAL_BACKBUFFER.memory as *mut std::ffi::c_void,
-                            height: GLOBAL_BACKBUFFER.height,
-                            width: GLOBAL_BACKBUFFER.width,
-                            pitch: GLOBAL_BACKBUFFER.pitch,
-                            bytes_per_pixel: GLOBAL_BACKBUFFER.bytes_per_pixel,
-                        };
 
-                        if Win32State.InputRecordingIndex != 0 {
-                            Win32RecordInput(&mut Win32State, &mut new_input);
-                        }
-
-                        if Win32State.InputPlayingIndex != 0 {
-                            Win32PlayBackInput(&mut Win32State, &mut new_input);
-                        }
-
-                        (game.update_and_render)(&mut game_memory, &mut new_input, &mut buffer);
-
-                        let AudioWallClock = win32_get_wall_clock();
-                        let FromBeginToAudioSeconds =
-                            win32_get_seconds_elasped(FlipWallClock, AudioWallClock);
-
-                        let mut PlayCursor = 0;
-                        let mut WriteCursor = 0;
-                        if (*GLOBAL_SECONDARY_BUFFER)
-                            .GetCurrentPosition(&mut PlayCursor, &mut WriteCursor)
-                            == DS_OK
-                        {
-                            if !SoundIsValid {
-                                SoundOutput.RunningSampleIndex =
-                                    WriteCursor / SoundOutput.BytesPerSample;
-                                SoundIsValid = true;
-                            }
-                            let ByteToLock = ((SoundOutput.RunningSampleIndex
-                                * SoundOutput.BytesPerSample)
-                                % SoundOutput.SecondaryBufferSize);
-
-                            let ExpectedSoundBytesPerFrame = (SoundOutput.SamplesPerSecond
-                                * SoundOutput.BytesPerSample)
-                                / game_update_hz;
-                            let SecondsLeftUntilFlip =
-                                (target_seconds_per_frame - FromBeginToAudioSeconds);
-                            let ExpectedBytesUntilFlip = ((SecondsLeftUntilFlip
-                                / target_seconds_per_frame)
-                                * ExpectedSoundBytesPerFrame as f32)
-                                as DWORD;
-
-                            let ExpectedFrameBoundaryByte = PlayCursor + ExpectedSoundBytesPerFrame;
-
-                            let mut SafeWriteCursor = WriteCursor;
-                            if SafeWriteCursor < PlayCursor {
-                                SafeWriteCursor += SoundOutput.SecondaryBufferSize;
-                            }
-                            SafeWriteCursor += SoundOutput.SafetyBytes;
-
-                            let AudioCardIsLowLatency =
-                                (SafeWriteCursor < ExpectedFrameBoundaryByte);
-
-                            let mut TargetCursor = 0;
-                            if (AudioCardIsLowLatency) {
-                                TargetCursor =
-                                    (ExpectedFrameBoundaryByte + ExpectedSoundBytesPerFrame);
-                            } else {
-                                TargetCursor = (WriteCursor
-                                    + ExpectedSoundBytesPerFrame
-                                    + SoundOutput.SafetyBytes);
-                            }
-                            TargetCursor = (TargetCursor % SoundOutput.SecondaryBufferSize);
-
-                            let mut BytesToWrite = 0;
-                            if (ByteToLock > TargetCursor) {
-                                BytesToWrite = (SoundOutput.SecondaryBufferSize - ByteToLock);
-                                BytesToWrite += TargetCursor;
-                            } else {
-                                BytesToWrite = TargetCursor - ByteToLock;
-                            }
-                            let mut SoundBuffer = game_sound_output_buffer {
-                                SamplesPerSecond: SoundOutput.SamplesPerSecond,
-                                SampleCount: BytesToWrite / SoundOutput.BytesPerSample,
-                                samples: samples,
+                            let mut buffer = GameOffScreenBuffer {
+                                memory: GLOBAL_BACKBUFFER.memory as *mut std::ffi::c_void,
+                                height: GLOBAL_BACKBUFFER.height,
+                                width: GLOBAL_BACKBUFFER.width,
+                                pitch: GLOBAL_BACKBUFFER.pitch,
+                                bytes_per_pixel: GLOBAL_BACKBUFFER.bytes_per_pixel,
                             };
-                            (game.get_sound_samples)(&mut game_memory, &mut SoundBuffer);
 
-                            /*
-
-                            #if HANDMADE_INTERNAL
-                                                        win32_debug_time_marker *Marker = &DebugTimeMarkers[DebugTimeMarkerIndex];
-                                                        Marker->OutputPlayCursor = PlayCursor;
-                                                        Marker->OutputWriteCursor = WriteCursor;
-                                                        Marker->OutputLocation = ByteToLock;
-                                                        Marker->OutputByteCount = BytesToWrite;
-                                                        Marker->ExpectedFlipPlayCursor = ExpectedFrameBoundaryByte;
-
-                                                        DWORD UnwrappedWriteCursor = WriteCursor;
-                                                        if(UnwrappedWriteCursor < PlayCursor)
-                                                        {
-                                                            UnwrappedWriteCursor += SoundOutput.SecondaryBufferSize;
-                                                        }
-                                                        AudioLatencyBytes = UnwrappedWriteCursor - PlayCursor;
-                                                        AudioLatencySeconds =
-                                                            (((real32)AudioLatencyBytes / (real32)SoundOutput.BytesPerSample) /
-                                                             (real32)SoundOutput.SamplesPerSecond);
-
-                                                        char TextBuffer[256];
-                                                        _snprintf_s(TextBuffer, sizeof(TextBuffer),
-                                                                    "BTL:%u TC:%u BTW:%u - PC:%u WC:%u DELTA:%u (%fs)\n",
-                                                                    ByteToLock, TargetCursor, BytesToWrite,
-                                                                    PlayCursor, WriteCursor, AudioLatencyBytes, AudioLatencySeconds);
-                                                        OutputDebugStringA(TextBuffer);
-                            #endif
-                            */
-                            Win32FillSoundBuffer(
-                                &mut SoundOutput,
-                                ByteToLock,
-                                BytesToWrite,
-                                &mut SoundBuffer,
-                            );
-                        } else {
-                            SoundIsValid = false;
-                        }
-
-                        let work_counter = win32_get_wall_clock();
-                        let work_seconds_elasped =
-                            win32_get_seconds_elasped(last_counter, work_counter);
-
-                        let mut seconds_elasped_for_frame = work_seconds_elasped;
-                        if seconds_elasped_for_frame < target_seconds_per_frame {
-                            if sleep_is_granular {
-                                let sleep_ms: DWORD = (1000.0
-                                    * (target_seconds_per_frame - seconds_elasped_for_frame))
-                                    as DWORD;
-                                if sleep_ms > 0 {
-                                    Sleep(sleep_ms);
-                                }
+                            if Win32State.InputRecordingIndex != 0 {
+                                Win32RecordInput(&mut Win32State, &mut new_input);
                             }
-                            while seconds_elasped_for_frame < target_seconds_per_frame {
-                                seconds_elasped_for_frame =
-                                    win32_get_seconds_elasped(last_counter, win32_get_wall_clock());
+
+                            if Win32State.InputPlayingIndex != 0 {
+                                Win32PlayBackInput(&mut Win32State, &mut new_input);
                             }
-                        } else {
-                            //TODO: MISSED FRAME RATE
-                        }
-                        let end_counter = win32_get_wall_clock();
-                        let ms_per_frame =
-                            1000.0 * win32_get_seconds_elasped(last_counter, end_counter);
-                        last_counter = end_counter;
 
-                        let dimension = win32_get_window_dimension(window);
+                            (game.update_and_render)(&mut game_memory, &mut new_input, &mut buffer);
 
-                        // TODO(casey): Note, current is wrong on the zero'th index
+                            let AudioWallClock = win32_get_wall_clock();
+                            let FromBeginToAudioSeconds =
+                                win32_get_seconds_elasped(FlipWallClock, AudioWallClock);
 
-                        #[cfg(feature = "handmade_internal")]
-                        {
-                            Win32DebugSyncDisplay(
-                                &mut GLOBAL_BACKBUFFER,
-                                DebugTimeMarkers.len() as i32,
-                                &DebugTimeMarkers,
-                                DebugTimeMarkerIndex - 1,
-                                &mut SoundOutput,
-                                target_seconds_per_frame,
-                            );
-                        }
-                        let device_context = GetDC(window);
-                        win32_update_window(
-                            device_context,
-                            dimension.width,
-                            dimension.height,
-                            &GLOBAL_BACKBUFFER,
-                        );
-                        ReleaseDC(window, device_context);
-                        FlipWallClock = win32_get_wall_clock();
-
-                        // NOTE(casey): This is debug code
-                        #[cfg(feature = "handmade_internal")]
-                        {
-                            let mut PlayCursor: DWORD = 0;
-                            let mut WriteCursor: DWORD = 0;
+                            let mut PlayCursor = 0;
+                            let mut WriteCursor = 0;
                             if (*GLOBAL_SECONDARY_BUFFER)
                                 .GetCurrentPosition(&mut PlayCursor, &mut WriteCursor)
                                 == DS_OK
                             {
-                                let Marker = &mut DebugTimeMarkers[DebugTimeMarkerIndex as usize];
-                                Marker.FlipPlayCursor = PlayCursor;
-                                Marker.FlipWriteCursor = WriteCursor;
+                                if !SoundIsValid {
+                                    SoundOutput.RunningSampleIndex =
+                                        WriteCursor / SoundOutput.BytesPerSample;
+                                    SoundIsValid = true;
+                                }
+                                let ByteToLock = ((SoundOutput.RunningSampleIndex
+                                    * SoundOutput.BytesPerSample)
+                                    % SoundOutput.SecondaryBufferSize);
+
+                                let ExpectedSoundBytesPerFrame = (SoundOutput.SamplesPerSecond
+                                    * SoundOutput.BytesPerSample)
+                                    / game_update_hz;
+                                let SecondsLeftUntilFlip =
+                                    (target_seconds_per_frame - FromBeginToAudioSeconds);
+                                let ExpectedBytesUntilFlip = ((SecondsLeftUntilFlip
+                                    / target_seconds_per_frame)
+                                    * ExpectedSoundBytesPerFrame as f32)
+                                    as DWORD;
+
+                                //todo:(jest) should be + ExpectedBytesUntilFlip but causes add overflow.
+                                let ExpectedFrameBoundaryByte =
+                                    PlayCursor + ExpectedSoundBytesPerFrame;
+
+                                let mut SafeWriteCursor = WriteCursor;
+                                if SafeWriteCursor < PlayCursor {
+                                    SafeWriteCursor += SoundOutput.SecondaryBufferSize;
+                                }
+                                SafeWriteCursor += SoundOutput.SafetyBytes;
+
+                                let AudioCardIsLowLatency =
+                                    (SafeWriteCursor < ExpectedFrameBoundaryByte);
+
+                                let mut TargetCursor = 0;
+                                if (AudioCardIsLowLatency) {
+                                    TargetCursor =
+                                        (ExpectedFrameBoundaryByte + ExpectedSoundBytesPerFrame);
+                                } else {
+                                    TargetCursor = (WriteCursor
+                                        + ExpectedSoundBytesPerFrame
+                                        + SoundOutput.SafetyBytes);
+                                }
+                                TargetCursor = (TargetCursor % SoundOutput.SecondaryBufferSize);
+
+                                let mut BytesToWrite = 0;
+                                if (ByteToLock > TargetCursor) {
+                                    BytesToWrite = (SoundOutput.SecondaryBufferSize - ByteToLock);
+                                    BytesToWrite += TargetCursor;
+                                } else {
+                                    BytesToWrite = TargetCursor - ByteToLock;
+                                }
+                                let mut SoundBuffer = game_sound_output_buffer {
+                                    SamplesPerSecond: SoundOutput.SamplesPerSecond,
+                                    SampleCount: BytesToWrite / SoundOutput.BytesPerSample,
+                                    samples: samples,
+                                };
+                                (game.get_sound_samples)(&mut game_memory, &mut SoundBuffer);
+
+                                /*
+
+                                #if HANDMADE_INTERNAL
+                                                            win32_debug_time_marker *Marker = &DebugTimeMarkers[DebugTimeMarkerIndex];
+                                                            Marker->OutputPlayCursor = PlayCursor;
+                                                            Marker->OutputWriteCursor = WriteCursor;
+                                                            Marker->OutputLocation = ByteToLock;
+                                                            Marker->OutputByteCount = BytesToWrite;
+                                                            Marker->ExpectedFlipPlayCursor = ExpectedFrameBoundaryByte;
+
+                                                            DWORD UnwrappedWriteCursor = WriteCursor;
+                                                            if(UnwrappedWriteCursor < PlayCursor)
+                                                            {
+                                                                UnwrappedWriteCursor += SoundOutput.SecondaryBufferSize;
+                                                            }
+                                                            AudioLatencyBytes = UnwrappedWriteCursor - PlayCursor;
+                                                            AudioLatencySeconds =
+                                                                (((real32)AudioLatencyBytes / (real32)SoundOutput.BytesPerSample) /
+                                                                 (real32)SoundOutput.SamplesPerSecond);
+
+                                                            char TextBuffer[256];
+                                                            _snprintf_s(TextBuffer, sizeof(TextBuffer),
+                                                                        "BTL:%u TC:%u BTW:%u - PC:%u WC:%u DELTA:%u (%fs)\n",
+                                                                        ByteToLock, TargetCursor, BytesToWrite,
+                                                                        PlayCursor, WriteCursor, AudioLatencyBytes, AudioLatencySeconds);
+                                                            OutputDebugStringA(TextBuffer);
+                                #endif
+                                */
+                                Win32FillSoundBuffer(
+                                    &mut SoundOutput,
+                                    ByteToLock,
+                                    BytesToWrite,
+                                    &mut SoundBuffer,
+                                );
+                            } else {
+                                SoundIsValid = false;
                             }
-                        }
 
-                        let temp = new_input;
-                        new_input = old_input;
-                        old_input = temp;
+                            let work_counter = win32_get_wall_clock();
+                            let work_seconds_elasped =
+                                win32_get_seconds_elasped(last_counter, work_counter);
 
-                        let end_cyle_counter = _rdtsc();
-                        let cycles_elapsed = end_cyle_counter - last_cycle_count;;
-                        last_cycle_count = end_cyle_counter;
+                            let mut seconds_elasped_for_frame = work_seconds_elasped;
+                            if seconds_elasped_for_frame < target_seconds_per_frame {
+                                if sleep_is_granular {
+                                    let sleep_ms: DWORD = (1000.0
+                                        * (target_seconds_per_frame - seconds_elasped_for_frame))
+                                        as DWORD;
+                                    if sleep_ms > 0 {
+                                        Sleep(sleep_ms);
+                                    }
+                                }
+                                while seconds_elasped_for_frame < target_seconds_per_frame {
+                                    seconds_elasped_for_frame = win32_get_seconds_elasped(
+                                        last_counter,
+                                        win32_get_wall_clock(),
+                                    );
+                                }
+                            } else {
+                                //TODO: MISSED FRAME RATE
+                            }
+                            let end_counter = win32_get_wall_clock();
+                            let ms_per_frame =
+                                1000.0 * win32_get_seconds_elasped(last_counter, end_counter);
+                            last_counter = end_counter;
 
-                        let fps = 0.0;
-                        let mcpf: i32 = cycles_elapsed as i32 / (1000 * 1000);
-                        /* println!(
-                            "{:#?} ms, the fps is : {:#?}, cycles {:#?}",
-                            ms_per_frame, fps, mcpf
-                        ); */
+                            let dimension = win32_get_window_dimension(window);
 
-                        #[cfg(feature = "handmade_internal")]
-                        {
-                            DebugTimeMarkerIndex += 1;
-                            if DebugTimeMarkerIndex == DebugTimeMarkers.len() as i32 {
-                                DebugTimeMarkerIndex = 0;
+                            // TODO(casey): Note, current is wrong on the zero'th index
+
+                            #[cfg(feature = "handmade_internal")]
+                            {
+                                Win32DebugSyncDisplay(
+                                    &mut GLOBAL_BACKBUFFER,
+                                    DebugTimeMarkers.len() as i32,
+                                    &DebugTimeMarkers,
+                                    DebugTimeMarkerIndex - 1,
+                                    &mut SoundOutput,
+                                    target_seconds_per_frame,
+                                );
+                            }
+                            let device_context = GetDC(window);
+                            win32_update_window(
+                                device_context,
+                                dimension.width,
+                                dimension.height,
+                                &GLOBAL_BACKBUFFER,
+                            );
+                            ReleaseDC(window, device_context);
+                            FlipWallClock = win32_get_wall_clock();
+
+                            // NOTE(casey): This is debug code
+                            #[cfg(feature = "handmade_internal")]
+                            {
+                                let mut PlayCursor: DWORD = 0;
+                                let mut WriteCursor: DWORD = 0;
+                                if (*GLOBAL_SECONDARY_BUFFER)
+                                    .GetCurrentPosition(&mut PlayCursor, &mut WriteCursor)
+                                    == DS_OK
+                                {
+                                    let Marker =
+                                        &mut DebugTimeMarkers[DebugTimeMarkerIndex as usize];
+                                    Marker.FlipPlayCursor = PlayCursor;
+                                    Marker.FlipWriteCursor = WriteCursor;
+                                }
+                            }
+
+                            let temp = new_input;
+                            new_input = old_input;
+                            old_input = temp;
+
+                            let end_cyle_counter = _rdtsc();
+                            let cycles_elapsed = end_cyle_counter - last_cycle_count;;
+                            last_cycle_count = end_cyle_counter;
+
+                            let fps = 0.0;
+                            let mcpf: i32 = cycles_elapsed as i32 / (1000 * 1000);
+                            /* println!(
+                                "{:#?} ms, the fps is : {:#?}, cycles {:#?}",
+                                ms_per_frame, fps, mcpf
+                            ); */
+
+                            #[cfg(feature = "handmade_internal")]
+                            {
+                                DebugTimeMarkerIndex += 1;
+                                if DebugTimeMarkerIndex == DebugTimeMarkers.len() as i32 {
+                                    DebugTimeMarkerIndex = 0;
+                                }
                             }
                         }
                     }
+                } else {
+                    println!("could not allocate memory");
                 }
-            } else {
-                println!("could not allocate memory");
             }
         }
     }
