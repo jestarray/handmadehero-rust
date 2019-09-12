@@ -23,6 +23,7 @@ pub struct GameOffScreenBuffer {
     pub width: i32,
     pub height: i32,
     pub pitch: i32,
+    pub bytes_per_pixel: i32,
 }
 pub struct game_sound_output_buffer {
     pub SamplesPerSecond: u32,
@@ -99,6 +100,10 @@ pub struct GameState {
     pub blue_offset: i32,
     pub tonehz: u32,
     pub t_sine: f32,
+
+    pub player_x: i32,
+    pub player_y: i32,
+    pub t_jump: f32,
 }
 pub struct GameMemory {
     pub is_initalized: i32,
@@ -131,7 +136,9 @@ pub extern "C" fn game_update_and_render(
             (*game_state).blue_offset = 0;
             (*game_state).t_sine = 0.0;
             memory.is_initalized = 1;
-            let file =
+            (*game_state).player_x = 100;
+            (*game_state).player_y = 100;
+            /*       let file =
                 (memory.debug_platform_read_entire_file)("D:\\handmadehero-rust\\src\\handmade.rs");
 
             if file.contents != null_mut() {
@@ -141,7 +148,7 @@ pub extern "C" fn game_update_and_render(
                     file.contents,
                 );
                 (memory.debug_platform_free_file_memory)(file.contents);
-            }
+            } */
         }
         for controller_index in 0..input.controllers.len() {
             let controller = &mut input.controllers[controller_index];
@@ -159,9 +166,17 @@ pub extern "C" fn game_update_and_render(
                 }
             }
 
-            if controller.action_down().ended_down != 0 {
-                (*game_state).green_offset += 1;
+            (*game_state).player_x += (4.0 as f32 * controller.stick_average_x) as i32;
+            (*game_state).player_y -= (5.0 as f32 * controller.stick_average_y) as i32;
+            if (*game_state).t_jump > 0.0 {
+                (*game_state).player_y += (5.0 as f32
+                    * (0.5 as f32 * std::f32::consts::PI * (*game_state).t_jump).sin())
+                    as i32;
             }
+            if controller.action_down().ended_down != 0 {
+                (*game_state).t_jump = 4.0;
+            }
+            (*game_state).t_jump -= 0.033 as f32;
         }
 
         render_weird_gradient(
@@ -169,8 +184,51 @@ pub extern "C" fn game_update_and_render(
             (*game_state).blue_offset,
             (*game_state).green_offset,
         );
+        RenderPlayer(&mut buffer, (*game_state).player_x, (*game_state).player_y);
     }
 }
+
+unsafe fn RenderPlayer(Buffer: &mut GameOffScreenBuffer, PlayerX: i32, PlayerY: i32) {
+    //uint8 *EndOfBuffer = (uint8 *)Buffer->Memory + Buffer->Pitch*Buffer->Height;
+    let EndOfBuffer: *mut u8 = Buffer
+        .memory
+        .offset((Buffer.pitch * Buffer.height) as isize) as *mut u8;
+
+    let Color: u32 = 0xFFFFFFFF;
+    let Top = PlayerY;
+    let Bottom = PlayerY + 10;
+    let mut x = PlayerX;
+    let mut y = Top;
+    while x < PlayerX + 10 {
+        x += 1;
+
+        let mut Pixel: *mut u8 = Buffer
+            .memory
+            .offset((x * Buffer.bytes_per_pixel + Top * Buffer.pitch) as isize)
+            as *mut u8;
+        while y < Bottom {
+            y += 1;
+            if Pixel >= Buffer.memory as *mut u8 && (Pixel.offset(4)) <= EndOfBuffer {
+                //let p = Pixel as *mut u32;
+                *Pixel = Color as u8;
+            }
+            Pixel = Pixel.offset(Buffer.pitch as isize);
+        }
+        /*     for(int Y = Top;
+            Y < Bottom;
+            ++Y)
+        {
+            if((Pixel >= Buffer->Memory) &&
+               ((Pixel + 4) <= EndOfBuffer))
+            {
+                *(uint32 *)Pixel = Color;
+            }
+
+            Pixel += Buffer->Pitch;
+        } */
+    }
+}
+
 unsafe fn GameOutputSound(
     game_state: *mut GameState,
     buffer: &mut game_sound_output_buffer,
@@ -204,7 +262,7 @@ unsafe fn render_weird_gradient(
     for y in 0..buffer.height {
         let mut pixel = row as *mut [u8; 4]; //array of 4, u8s
         for x in 0..buffer.width {
-            *pixel = [(x + blue_offset) as u8, (y + green_offset) as u8, 240, 0];
+            *pixel = [(x + blue_offset) as u8, (y + green_offset) as u8, 20, 0];
             pixel = pixel.offset(1); // adds sizeof(pixel), 4
         }
         row = row.offset(buffer.pitch as isize);

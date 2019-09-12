@@ -26,4 +26,5 @@ name = "win32_handmade"
 path = "src/win32_handmade.rs"
 
 [profile.dev]
-opt-level = 3 # optimize dev builds needed to match hh performance 
+# optimize dev builds needed to match hh performance ,  uncomment for visual studio debugger to work better
+opt-level = 3

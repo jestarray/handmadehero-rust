@@ -20,7 +20,9 @@ use winapi::shared::minwindef::DWORD;
 use winapi::shared::minwindef::FALSE;
 use winapi::shared::minwindef::FILETIME;
 use winapi::shared::minwindef::HMODULE;
+use winapi::shared::minwindef::LPVOID;
 use winapi::shared::minwindef::MAX_PATH;
+use winapi::shared::minwindef::TRUE;
 use winapi::shared::mmreg::WAVEFORMATEX;
 use winapi::shared::mmreg::WAVE_FORMAT_PCM;
 use winapi::shared::ntdef::HRESULT;
@@ -61,9 +63,11 @@ use winapi::um::synchapi::Sleep;
 use winapi::um::timeapi::timeBeginPeriod;
 use winapi::um::unknwnbase::LPUNKNOWN;
 use winapi::um::winbase::CopyFileA;
+use winapi::um::wingdi::RGB;
 use winapi::um::winnt::FILE_SHARE_READ;
 use winapi::um::winnt::GENERIC_READ;
 use winapi::um::winnt::GENERIC_WRITE;
+use winapi::um::winnt::HANDLE;
 use winapi::um::winnt::LARGE_INTEGER;
 use winapi::um::winnt::MEM_RESERVE;
 use winapi::um::winnt::PF_RDTSC_INSTRUCTION_AVAILABLE;
@@ -71,8 +75,12 @@ use winapi::um::winuser::GetDC;
 use winapi::um::winuser::MessageBoxA;
 use winapi::um::winuser::PeekMessageW;
 use winapi::um::winuser::ReleaseDC;
+use winapi::um::winuser::SetLayeredWindowAttributes;
+use winapi::um::winuser::LWA_ALPHA;
 use winapi::um::winuser::PM_REMOVE;
 use winapi::um::winuser::WM_QUIT;
+use winapi::um::winuser::WS_EX_LAYERED;
+use winapi::um::winuser::WS_EX_TOPMOST;
 use winapi::um::xinput::XINPUT_GAMEPAD_LEFT_THUMB_DEADZONE;
 use winapi::um::xinput::XINPUT_STATE;
 use winapi::um::xinput::XINPUT_VIBRATION;
@@ -262,6 +270,16 @@ struct win32_debug_time_marker {
 struct Win32WindowDimension {
     width: i32,
     height: i32,
+}
+
+struct win32_state {
+    TotalSize: u64,
+    GameMemoryBlock: *mut c_void,
+    RecordingHandle: HANDLE,
+    InputRecordingIndex: i32,
+
+    PlaybackHandle: HANDLE,
+    InputPlayingIndex: i32,
 }
 
 fn win32_get_window_dimension(window: HWND) -> Win32WindowDimension {
@@ -758,7 +776,108 @@ fn win32_update_window(
     }
 }
 
-unsafe fn win32_process_pending_messages(keyboard_controller: &mut GameControllerInput) {
+unsafe fn Win32BeginRecordingInput(Win32State: &mut win32_state, InputRecordingIndex: i32) {
+    Win32State.InputRecordingIndex = InputRecordingIndex;
+    // TODO(casey): These files must go in a temporary/build directory!!!!
+    // TODO(casey): Lazily write the giant memory block and use a memory copy instead?
+
+    let file_name = cstring!("foo.hmi");
+    Win32State.RecordingHandle = CreateFileA(
+        file_name.as_ptr(),
+        GENERIC_WRITE,
+        0,
+        null_mut(),
+        CREATE_ALWAYS,
+        0,
+        null_mut(),
+    );
+
+    let BytesToWrite = Win32State.TotalSize as DWORD;
+    let mut BytesWritten = 0;
+    WriteFile(
+        Win32State.RecordingHandle,
+        Win32State.GameMemoryBlock,
+        BytesToWrite,
+        &mut BytesWritten,
+        null_mut(),
+    );
+}
+
+unsafe fn Win32EndRecordingInput(Win32State: &mut win32_state) {
+    CloseHandle(Win32State.RecordingHandle);
+    Win32State.InputRecordingIndex = 0;
+}
+
+unsafe fn Win32BeginInputPlayBack(Win32State: &mut win32_state, InputPlayingIndex: i32) {
+    Win32State.InputPlayingIndex = InputPlayingIndex;
+    let FileName = cstring!("foo.hmi");
+    Win32State.PlaybackHandle = CreateFileA(
+        FileName.as_ptr(),
+        GENERIC_READ,
+        FILE_SHARE_READ,
+        null_mut(),
+        OPEN_EXISTING,
+        0,
+        null_mut(),
+    );
+
+    let BytesToRead = Win32State.TotalSize as DWORD;
+    let mut BytesRead = 0;
+    ReadFile(
+        Win32State.PlaybackHandle,
+        Win32State.GameMemoryBlock,
+        BytesToRead,
+        &mut BytesRead,
+        null_mut(),
+    );
+}
+
+unsafe fn Win32EndInputPlayBack(Win32State: &mut win32_state) {
+    CloseHandle(Win32State.PlaybackHandle);
+    Win32State.InputPlayingIndex = 0;
+}
+
+unsafe fn Win32RecordInput(Win32State: &mut win32_state, NewInput: &mut GameInput) {
+    let mut BytesWritten = 0;
+    WriteFile(
+        Win32State.RecordingHandle,
+        NewInput as *mut GameInput as *mut c_void,
+        size_of::<GameInput>().try_into().unwrap(),
+        &mut BytesWritten,
+        null_mut(),
+    );
+}
+
+unsafe fn Win32PlayBackInput(Win32State: &mut win32_state, NewInput: &mut GameInput) {
+    let mut BytesRead = 0;
+    if ReadFile(
+        Win32State.PlaybackHandle,
+        NewInput as *mut GameInput as *mut c_void,
+        size_of::<GameInput>().try_into().unwrap(),
+        &mut BytesRead,
+        null_mut(),
+    ) != 0
+    {
+        if (BytesRead == 0) {
+            // NOTE(casey): We've hit the end of the stream, go back to the beginning
+            let PlayingIndex = Win32State.InputPlayingIndex;
+            Win32EndInputPlayBack(Win32State);
+            Win32BeginInputPlayBack(Win32State, PlayingIndex);
+            ReadFile(
+                Win32State.PlaybackHandle,
+                NewInput as *mut GameInput as *mut c_void,
+                size_of::<GameInput>().try_into().unwrap(),
+                &mut BytesRead,
+                null_mut(),
+            );
+        }
+    }
+}
+
+unsafe fn win32_process_pending_messages(
+    Win32State: &mut win32_state,
+    keyboard_controller: &mut GameControllerInput,
+) {
     let mut message = zeroed::<MSG>();
     while PeekMessageW(&mut message, zeroed(), 0, 0, PM_REMOVE) != 0 {
         if message.message == WM_QUIT {
@@ -810,6 +929,17 @@ unsafe fn win32_process_pending_messages(keyboard_controller: &mut GameControlle
                                 is_down,
                             );
                         }
+                        'L' => {
+                            if is_down {
+                                if Win32State.InputRecordingIndex == 0 {
+                                    Win32BeginRecordingInput(Win32State, 1);
+                                } else {
+                                    Win32EndRecordingInput(Win32State);
+                                    Win32BeginInputPlayBack(Win32State, 1);
+                                }
+                            }
+                        }
+
                         #[cfg(feature = "handmade_internal")]
                         'P' => {
                             if is_down {
@@ -887,7 +1017,14 @@ unsafe extern "system" fn win32_main_window_callback(
             RUNNING = false;
             0
         }
-        WM_ACTIVATEAPP => 0,
+        WM_ACTIVATEAPP => {
+            if wparam == TRUE.try_into().unwrap() {
+                SetLayeredWindowAttributes(window, RGB(0, 0, 0), 255, LWA_ALPHA);
+            } else {
+                SetLayeredWindowAttributes(window, RGB(0, 0, 0), 64, LWA_ALPHA);
+            }
+            0
+        }
         WM_DESTROY => {
             RUNNING = false;
             0
@@ -1036,7 +1173,7 @@ pub unsafe extern "system" fn winmain() {
     match RegisterClassW(&wnd_class) {
         _atom => {
             let window = CreateWindowExW(
-                0,
+                WS_EX_TOPMOST | WS_EX_LAYERED,
                 name.as_ptr(),
                 title.as_ptr(),
                 WS_OVERLAPPEDWINDOW | WS_VISIBLE,
@@ -1071,6 +1208,14 @@ pub unsafe extern "system" fn winmain() {
 
                 (*GLOBAL_SECONDARY_BUFFER).Play(0, 0, DSBPLAY_LOOPING);
 
+                let mut Win32State = win32_state {
+                    GameMemoryBlock: null_mut(),
+                    InputPlayingIndex: 0,
+                    InputRecordingIndex: 0,
+                    PlaybackHandle: null_mut(),
+                    RecordingHandle: null_mut(),
+                    TotalSize: 0,
+                };
                 RUNNING = true;
 
                 let samples = VirtualAlloc(
@@ -1079,6 +1224,13 @@ pub unsafe extern "system" fn winmain() {
                     MEM_COMMIT | MEM_RESERVE,
                     PAGE_READWRITE,
                 ) as *mut i16;
+
+                let mut base_address = 0 as LPVOID;
+
+                #[cfg(feature = "handmade_internal")]
+                {
+                    base_address = (2 * 1024 * 1024 * 1024 * 1024 as u64) as LPVOID; //2 terabytes
+                }
 
                 RUNNING = true; // TODO
                 let mut game_memory = GameMemory {
@@ -1091,6 +1243,16 @@ pub unsafe extern "system" fn winmain() {
                     debug_platform_read_entire_file,
                     debug_platform_write_entire_file,
                 };
+
+                Win32State.TotalSize =
+                    game_memory.permanent_storage_size * game_memory.transient_storage_size;
+                Win32State.GameMemoryBlock = VirtualAlloc(
+                    base_address,
+                    Win32State.TotalSize as usize,
+                    MEM_RESERVE | MEM_COMMIT,
+                    PAGE_READWRITE,
+                );
+                game_memory.permanent_storage = Win32State.GameMemoryBlock as *mut std::ffi::c_void;
 
                 game_memory.permanent_storage = VirtualAlloc(
                     null_mut(),
@@ -1149,7 +1311,10 @@ pub unsafe extern "system" fn winmain() {
                                 old_keyboard_controller.buttons[button_index].ended_down;
                         }
 
-                        win32_process_pending_messages(&mut new_keyboard_controller);
+                        win32_process_pending_messages(
+                            &mut Win32State,
+                            &mut new_keyboard_controller,
+                        );
 
                         if !GlobalPause {
                             let mut max_controller_count = XUSER_MAX_COUNT;
@@ -1326,7 +1491,17 @@ pub unsafe extern "system" fn winmain() {
                             height: GLOBAL_BACKBUFFER.height,
                             width: GLOBAL_BACKBUFFER.width,
                             pitch: GLOBAL_BACKBUFFER.pitch,
+                            bytes_per_pixel: GLOBAL_BACKBUFFER.bytes_per_pixel,
                         };
+
+                        if Win32State.InputRecordingIndex != 0 {
+                            Win32RecordInput(&mut Win32State, &mut new_input);
+                        }
+
+                        if Win32State.InputPlayingIndex != 0 {
+                            Win32PlayBackInput(&mut Win32State, &mut new_input);
+                        }
+
                         (game.update_and_render)(&mut game_memory, &mut new_input, &mut buffer);
 
                         let AudioWallClock = win32_get_wall_clock();
@@ -1473,12 +1648,14 @@ pub unsafe extern "system" fn winmain() {
                                 target_seconds_per_frame,
                             );
                         }
+                        let device_context = GetDC(window);
                         win32_update_window(
                             device_context,
                             dimension.width,
                             dimension.height,
                             &GLOBAL_BACKBUFFER,
                         );
+                        ReleaseDC(window, device_context);
                         FlipWallClock = win32_get_wall_clock();
 
                         // NOTE(casey): This is debug code
