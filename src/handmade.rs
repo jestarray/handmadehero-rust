@@ -34,8 +34,15 @@ pub struct game_sound_output_buffer {
 
 #[derive(Default)]
 pub struct GameInput {
-    //TODO(jest): insert clock values
+    pub MouseButtons: [GameButtonState; 5],
+    pub MouseX: i32,
+    pub MouseY: i32,
+    pub MouseZ: i32,
     pub controllers: [GameControllerInput; 5],
+}
+#[derive(Default)]
+pub struct thread_context {
+    pub place_hodler: i32,
 }
 #[derive(Default)]
 pub struct GameControllerInput {
@@ -103,6 +110,8 @@ pub struct GameState {
 
     pub player_x: i32,
     pub player_y: i32,
+    pub mouse_x: i32,
+    pub mouse_y: i32,
     pub t_jump: f32,
 }
 pub struct GameMemory {
@@ -111,10 +120,16 @@ pub struct GameMemory {
     pub transient_storage_size: u64,
     pub transient_storage: *mut c_void,
     pub permanent_storage: *mut c_void,
-    pub debug_platform_read_entire_file: unsafe fn(file_name: &str) -> DebugReadFile,
-    pub debug_platform_free_file_memory: unsafe fn(memory: *mut std::ffi::c_void),
-    pub debug_platform_write_entire_file:
-        unsafe fn(file_name: &str, memory_size: u32, memory: *mut std::ffi::c_void) -> bool,
+    pub debug_platform_read_entire_file:
+        unsafe fn(thread: &thread_context, file_name: &str) -> DebugReadFile,
+    pub debug_platform_free_file_memory:
+        unsafe fn(thread: &thread_context, memory: *mut std::ffi::c_void),
+    pub debug_platform_write_entire_file: unsafe fn(
+        thread: &thread_context,
+        file_name: &str,
+        memory_size: u32,
+        memory: *mut std::ffi::c_void,
+    ) -> bool,
 }
 
 pub struct DebugReadFile {
@@ -124,6 +139,7 @@ pub struct DebugReadFile {
 
 #[no_mangle]
 pub extern "C" fn game_update_and_render(
+    thread: &thread_context,
     memory: &mut GameMemory,
     input: &mut GameInput,
     mut buffer: &mut GameOffScreenBuffer,
@@ -169,7 +185,7 @@ pub extern "C" fn game_update_and_render(
             (*game_state).player_x += (4.0 as f32 * controller.stick_average_x) as i32;
             (*game_state).player_y -= (5.0 as f32 * controller.stick_average_y) as i32;
             if (*game_state).t_jump > 0.0 {
-                (*game_state).player_y += (5.0 as f32
+                (*game_state).player_x -= (5.0 as f32
                     * (0.5 as f32 * std::f32::consts::PI * (*game_state).t_jump).sin())
                     as i32;
             }
@@ -185,6 +201,19 @@ pub extern "C" fn game_update_and_render(
             (*game_state).green_offset,
         );
         RenderPlayer(&mut buffer, (*game_state).player_x, (*game_state).player_y);
+
+        RenderPlayer(&mut buffer, (*game_state).mouse_x, (*game_state).mouse_y);
+
+        for ButtonIndex in 0..input.MouseButtons.len()
+        /*
+        (int ButtonIndex = 0;
+            ButtonIndex < ArrayCount(Input->MouseButtons);
+            ++ButtonIndex) */
+        {
+            if input.MouseButtons[ButtonIndex].ended_down != 0 {
+                RenderPlayer(&mut buffer, 10 + 20 * ButtonIndex as i32, 10);
+            }
+        }
     }
 }
 
@@ -198,7 +227,6 @@ unsafe fn RenderPlayer(Buffer: &mut GameOffScreenBuffer, PlayerX: i32, PlayerY: 
     let Top = PlayerY;
     let Bottom = PlayerY + 10;
     let mut x = PlayerX;
-    let mut y = Top;
     while x < PlayerX + 10 {
         x += 1;
 
@@ -206,11 +234,13 @@ unsafe fn RenderPlayer(Buffer: &mut GameOffScreenBuffer, PlayerX: i32, PlayerY: 
             .memory
             .offset((x * Buffer.bytes_per_pixel + Top * Buffer.pitch) as isize)
             as *mut u8;
+
+        let mut y = Top;
         while y < Bottom {
             y += 1;
             if Pixel >= Buffer.memory as *mut u8 && (Pixel.offset(4)) <= EndOfBuffer {
                 //let p = Pixel as *mut u32;
-                *Pixel = Color as u8;
+                *(Pixel as *mut u32) = Color;
             }
             Pixel = Pixel.offset(Buffer.pitch as isize);
         }
@@ -271,6 +301,7 @@ unsafe fn render_weird_gradient(
 
 #[no_mangle]
 pub unsafe extern "C" fn GameGetSoundSamples(
+    thread: &thread_context,
     Memory: &mut GameMemory,
     SoundBuffer: &mut game_sound_output_buffer,
 ) {
