@@ -1308,7 +1308,7 @@ pub unsafe extern "system" fn winmain() {
         lpszMenuName: null_mut(),
     };
 
-    win32_resize_dibsection(&mut GLOBAL_BACKBUFFER, 1280, 720);
+    win32_resize_dibsection(&mut GLOBAL_BACKBUFFER, 960, 540);
 
     match RegisterClassW(&wnd_class) {
         _atom => {
@@ -1489,7 +1489,7 @@ pub unsafe extern "system" fn winmain() {
                 {
                     let mut old_input = GameInput::default();
                     let mut new_input = GameInput::default();
-
+                    new_input.SecondsToAdvanceOverUpdate = target_seconds_per_frame;
                     let mut last_counter = win32_get_wall_clock();
                     let mut FlipWallClock = win32_get_wall_clock();
 

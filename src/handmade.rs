@@ -16,6 +16,7 @@ typedef float real32;
 typedef double real64;
 
 */
+use std::convert::TryInto;
 use std::ffi::c_void;
 use std::ptr::null_mut;
 pub struct GameOffScreenBuffer {
@@ -38,6 +39,7 @@ pub struct GameInput {
     pub MouseX: i32,
     pub MouseY: i32,
     pub MouseZ: i32,
+    pub SecondsToAdvanceOverUpdate: f32,
     pub controllers: [GameControllerInput; 5],
 }
 #[derive(Default)]
@@ -102,18 +104,7 @@ pub struct GameButtonState {
     pub ended_down: i32,
 }
 #[derive(Default)]
-pub struct GameState {
-    pub green_offset: i32,
-    pub blue_offset: i32,
-    pub tonehz: u32,
-    pub t_sine: f32,
-
-    pub player_x: i32,
-    pub player_y: i32,
-    pub mouse_x: i32,
-    pub mouse_y: i32,
-    pub t_jump: f32,
-}
+pub struct GameState {}
 pub struct GameMemory {
     pub is_initalized: i32,
     pub permanent_storage_size: u64,
@@ -147,116 +138,93 @@ pub extern "C" fn game_update_and_render(
     unsafe {
         let mut game_state = memory.permanent_storage as *mut GameState;
         if memory.is_initalized == 0 {
-            (*game_state).tonehz = 256;
-            (*game_state).green_offset = 0;
-            (*game_state).blue_offset = 0;
-            (*game_state).t_sine = 0.0;
             memory.is_initalized = 1;
-            (*game_state).player_x = 100;
-            (*game_state).player_y = 100;
-            /*       let file =
-                (memory.debug_platform_read_entire_file)("D:\\handmadehero-rust\\src\\handmade.rs");
-
-            if file.contents != null_mut() {
-                (memory.debug_platform_write_entire_file)(
-                    "HH_TEST.out",
-                    file.content_size,
-                    file.contents,
-                );
-                (memory.debug_platform_free_file_memory)(file.contents);
-            } */
         }
         for controller_index in 0..input.controllers.len() {
             let controller = &mut input.controllers[controller_index];
             if controller.is_analog != 0 {
-                (*game_state).blue_offset += (4.0 * controller.stick_average_x) as i32;
-                (*game_state).tonehz = 256u32
-                    .overflowing_add((128.0 * controller.stick_average_y) as u32)
-                    .0;
             } else {
-                if controller.move_left().ended_down != 0 {
-                    (*game_state).blue_offset -= 1;
-                }
-                if controller.move_right().ended_down != 0 {
-                    (*game_state).blue_offset += 1;
-                }
-            }
-
-            (*game_state).player_x += (4.0 as f32 * controller.stick_average_x) as i32;
-            (*game_state).player_y -= (5.0 as f32 * controller.stick_average_y) as i32;
-            if (*game_state).t_jump > 0.0 {
-                (*game_state).player_x -= (5.0 as f32
-                    * (0.5 as f32 * std::f32::consts::PI * (*game_state).t_jump).sin())
-                    as i32;
-            }
-            if controller.action_down().ended_down != 0 {
-                (*game_state).t_jump = 4.0;
-            }
-            (*game_state).t_jump -= 0.033 as f32;
+            };
         }
 
-        render_weird_gradient(
+        let width = buffer.width;
+        let height = buffer.height;
+
+        DrawRectangle(
             &mut buffer,
-            (*game_state).blue_offset,
-            (*game_state).green_offset,
+            0.0,
+            0.0,
+            width as f32,
+            height as f32,
+            0x00FF00FF,
         );
-        RenderPlayer(&mut buffer, (*game_state).player_x, (*game_state).player_y);
-
-        RenderPlayer(&mut buffer, (*game_state).mouse_x, (*game_state).mouse_y);
-
-        for ButtonIndex in 0..input.MouseButtons.len()
-        /*
-        (int ButtonIndex = 0;
-            ButtonIndex < ArrayCount(Input->MouseButtons);
-            ++ButtonIndex) */
-        {
-            if input.MouseButtons[ButtonIndex].ended_down != 0 {
-                RenderPlayer(&mut buffer, 10 + 20 * ButtonIndex as i32, 10);
-            }
-        }
+        DrawRectangle(&mut buffer, 10.0, 10.0, 40.0, 40.0, 0x0000FFFF);
     }
 }
 
-unsafe fn RenderPlayer(Buffer: &mut GameOffScreenBuffer, PlayerX: i32, PlayerY: i32) {
-    //uint8 *EndOfBuffer = (uint8 *)Buffer->Memory + Buffer->Pitch*Buffer->Height;
-    let EndOfBuffer: *mut u8 = Buffer
-        .memory
-        .offset((Buffer.pitch * Buffer.height) as isize) as *mut u8;
+unsafe fn DrawRectangle(
+    Buffer: &mut GameOffScreenBuffer,
+    RealMinX: f32,
+    RealMinY: f32,
+    RealMaxX: f32,
+    RealMaxY: f32,
+    Color: u32,
+) {
+    // TODO(casey): Floating point color tomorrow!!!!!!
 
-    let Color: u32 = 0xFFFFFFFF;
-    let Top = PlayerY;
-    let Bottom = PlayerY + 10;
-    let mut x = PlayerX;
-    while x < PlayerX + 10 {
-        x += 1;
+    let mut MinX = (RealMinX).round() as i32;
+    let mut MinY = (RealMinY).round() as i32;
+    let mut MaxX = (RealMaxX).round() as i32;
+    let mut MaxY = (RealMaxY).round() as i32;
 
-        let mut Pixel: *mut u8 = Buffer
-            .memory
-            .offset((x * Buffer.bytes_per_pixel + Top * Buffer.pitch) as isize)
-            as *mut u8;
-
-        let mut y = Top;
-        while y < Bottom {
-            y += 1;
-            if Pixel >= Buffer.memory as *mut u8 && (Pixel.offset(4)) <= EndOfBuffer {
-                //let p = Pixel as *mut u32;
-                *(Pixel as *mut u32) = Color;
-            }
-            Pixel = Pixel.offset(Buffer.pitch as isize);
-        }
-        /*     for(int Y = Top;
-            Y < Bottom;
-            ++Y)
-        {
-            if((Pixel >= Buffer->Memory) &&
-               ((Pixel + 4) <= EndOfBuffer))
-            {
-                *(uint32 *)Pixel = Color;
-            }
-
-            Pixel += Buffer->Pitch;
-        } */
+    if (MinX < 0) {
+        MinX = 0;
     }
+
+    if (MinY < 0) {
+        MinY = 0;
+    }
+
+    if (MaxX > Buffer.width) {
+        MaxX = Buffer.width;
+    }
+
+    if (MaxY > Buffer.height) {
+        MaxY = Buffer.height;
+    }
+
+    let mut Row = Buffer
+        .memory
+        .offset((MinX * Buffer.bytes_per_pixel + MinY * Buffer.pitch) as isize)
+        as *mut u8;
+    let mut y = MinY;
+    while y < MaxY {
+        y += 1;
+        let mut pixel = Row as *mut u32;
+
+        let mut x = MinX;
+        while x < MaxX {
+            x += 1;
+
+            *pixel = Color;
+            pixel = pixel.offset(1);
+        }
+        Row = Row.offset(Buffer.pitch.try_into().unwrap());
+    }
+    /*   for(int Y = MinY;
+        Y < MaxY;
+        ++Y)
+    {
+        uint32 *Pixel = (uint32 *)Row;
+        for(int X = MinX;
+            X < MaxX;
+            ++X)
+        {
+            *Pixel++ = Color;
+        }
+
+        Row += Buffer.Pitch;
+    } */
 }
 
 unsafe fn GameOutputSound(
@@ -264,7 +232,7 @@ unsafe fn GameOutputSound(
     buffer: &mut game_sound_output_buffer,
     tone_hz: u32,
 ) {
-    let tone_volume = 3000;
+    /*     let tone_volume = 3000;
     let wave_period = buffer.SamplesPerSecond / tone_hz;
 
     let mut sample_out = buffer.samples;
@@ -280,10 +248,10 @@ unsafe fn GameOutputSound(
 
             (*game_state).t_sine += (1.0 / wave_period as f32) * 2.0 * std::f32::consts::PI;
         }
-    }
+    } */
 }
 
-unsafe fn render_weird_gradient(
+/* unsafe fn render_weird_gradient(
     buffer: &mut GameOffScreenBuffer,
     blue_offset: i32,
     green_offset: i32,
@@ -298,6 +266,7 @@ unsafe fn render_weird_gradient(
         row = row.offset(buffer.pitch as isize);
     }
 }
+ */
 
 #[no_mangle]
 pub unsafe extern "C" fn GameGetSoundSamples(
@@ -306,5 +275,5 @@ pub unsafe extern "C" fn GameGetSoundSamples(
     SoundBuffer: &mut game_sound_output_buffer,
 ) {
     let GameState = Memory.permanent_storage as *mut GameState;
-    GameOutputSound(GameState, SoundBuffer, (*GameState).tonehz);
+    GameOutputSound(GameState, SoundBuffer, 400);
 }
