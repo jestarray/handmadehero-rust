@@ -39,7 +39,7 @@ pub struct GameInput {
     pub MouseX: i32,
     pub MouseY: i32,
     pub MouseZ: i32,
-    pub SecondsToAdvanceOverUpdate: f32,
+    pub dtForFrame: f32,
     pub controllers: [GameControllerInput; 5],
 }
 #[derive(Default)]
@@ -104,7 +104,10 @@ pub struct GameButtonState {
     pub ended_down: i32,
 }
 #[derive(Default)]
-pub struct GameState {}
+pub struct GameState {
+    pub PlayerX: f32,
+    pub PlayerY: f32,
+}
 pub struct GameMemory {
     pub is_initalized: i32,
     pub permanent_storage_size: u64,
@@ -144,8 +147,47 @@ pub extern "C" fn game_update_and_render(
             let controller = &mut input.controllers[controller_index];
             if controller.is_analog != 0 {
             } else {
+                // NOTE(casey): Use digital movement tuning
+                let mut dPlayerX = 0.0; // pixels/second
+                let mut dPlayerY = 0.0; // pixels/second
+
+                if controller.move_up().ended_down != 0 {
+                    dPlayerY = -1.0;
+                }
+                if controller.move_down().ended_down != 0 {
+                    dPlayerY = 1.0;
+                }
+                if controller.move_left().ended_down != 0 {
+                    dPlayerX = -1.0;
+                }
+                if controller.move_right().ended_down != 0 {
+                    dPlayerX = 1.0;
+                }
+                dPlayerX *= 64.0;
+                dPlayerY *= 64.0;
+
+                // TODO(casey): Diagonal will be faster!  Fix once we have vectors :)
+                (*game_state).PlayerX += input.dtForFrame * dPlayerX as f32;
+                (*game_state).PlayerY += input.dtForFrame * dPlayerY as f32;
             };
         }
+        //[9][17]
+        let TileMap = [
+            [1, 1, 1, 1, 1, 1, 1, 1, 0, 1, 1, 1, 1, 1, 1, 1, 1],
+            [1, 1, 0, 0, 0, 1, 0, 0, 0, 0, 0, 0, 0, 1, 0, 0, 1],
+            [1, 1, 0, 0, 0, 0, 0, 0, 1, 0, 0, 0, 0, 0, 1, 0, 1],
+            [1, 0, 0, 0, 0, 0, 0, 0, 1, 0, 0, 0, 0, 0, 0, 0, 1],
+            [0, 0, 0, 0, 0, 1, 0, 0, 1, 0, 0, 0, 0, 0, 0, 0, 0],
+            [1, 1, 0, 0, 0, 1, 0, 0, 1, 0, 0, 0, 0, 1, 0, 0, 1],
+            [1, 0, 0, 0, 0, 1, 0, 0, 1, 0, 0, 0, 1, 0, 0, 0, 1],
+            [1, 1, 1, 1, 1, 0, 0, 0, 0, 0, 0, 0, 0, 1, 0, 0, 1],
+            [1, 1, 1, 1, 1, 1, 1, 1, 0, 1, 1, 1, 1, 1, 1, 1, 1],
+        ];
+
+        let UpperLeftX: f32 = -30.0;
+        let UpperLeftY: f32 = 0.0;
+        let TileWidth: f32 = 60.0;
+        let TileHeight: f32 = 60.0;
 
         let width = buffer.width;
         let height = buffer.height;
@@ -156,9 +198,43 @@ pub extern "C" fn game_update_and_render(
             0.0,
             width as f32,
             height as f32,
-            0x00FF00FF,
+            1.0,
+            0.0,
+            0.1,
         );
-        DrawRectangle(&mut buffer, 10.0, 10.0, 40.0, 40.0, 0x0000FFFF);
+
+        for (row_index, row) in TileMap.iter().enumerate() {
+            for (column_index, column) in row.iter().enumerate() {
+                let tileID = column;
+                let mut Gray = 0.5;
+                match tileID {
+                    1 => Gray = 1.0,
+                    _ => {}
+                }
+                let mut MinX = UpperLeftX + (column_index as f32) * TileWidth;
+                let mut MinY = UpperLeftY + (row_index as f32) * TileHeight;
+                let mut MaxX = MinX + TileWidth;
+                let mut MaxY = MinY + TileHeight;
+                DrawRectangle(buffer, MinX, MinY, MaxX, MaxY, Gray, Gray, Gray);
+            }
+        }
+        let PlayerR = 1.0;
+        let PlayerG = 1.0;
+        let mut PlayerB = 0.0;
+        let mut PlayerWidth = 0.75 * TileWidth as f32;
+        let mut PlayerHeight = TileHeight;
+        let mut PlayerLeft = (*game_state).PlayerX - 0.5 * PlayerWidth;
+        let mut PlayerTop = (*game_state).PlayerY - PlayerHeight as f32;
+        DrawRectangle(
+            buffer,
+            PlayerLeft,
+            PlayerTop,
+            PlayerLeft + PlayerWidth,
+            PlayerTop + PlayerHeight as f32,
+            PlayerR,
+            PlayerG,
+            PlayerB,
+        );
     }
 }
 
@@ -168,7 +244,9 @@ unsafe fn DrawRectangle(
     RealMinY: f32,
     RealMaxX: f32,
     RealMaxY: f32,
-    Color: u32,
+    R: f32,
+    G: f32,
+    B: f32,
 ) {
     // TODO(casey): Floating point color tomorrow!!!!!!
 
@@ -193,6 +271,9 @@ unsafe fn DrawRectangle(
         MaxY = Buffer.height;
     }
 
+    let Color = ((R * 255.0).round() as u32) << 16
+        | ((G * 255.0).round() as u32) << 8
+        | ((B * 255.0).round() as u32) << 0;
     let mut Row = Buffer
         .memory
         .offset((MinX * Buffer.bytes_per_pixel + MinY * Buffer.pitch) as isize)

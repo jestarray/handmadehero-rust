@@ -1199,8 +1199,6 @@ unsafe fn win32_get_seconds_elasped(start: LARGE_INTEGER, end: LARGE_INTEGER) ->
 }
 fn main() {
     unsafe {
-        let t = b"asdf\0";
-        dbg!(from_utf8(t));
         winmain();
     }
 }
@@ -1489,7 +1487,6 @@ pub unsafe extern "system" fn winmain() {
                 {
                     let mut old_input = GameInput::default();
                     let mut new_input = GameInput::default();
-                    new_input.SecondsToAdvanceOverUpdate = target_seconds_per_frame;
                     let mut last_counter = win32_get_wall_clock();
                     let mut FlipWallClock = win32_get_wall_clock();
 
@@ -1506,6 +1503,8 @@ pub unsafe extern "system" fn winmain() {
                     );
                     let mut last_cycle_count = _rdtsc();
                     while RUNNING {
+                        new_input.dtForFrame = target_seconds_per_frame;
+
                         let new_dll_write_time =
                             win32_get_last_write_time(source_game_code_dll_file_name_full_path);
                         if CompareFileTime(&new_dll_write_time, &game.dll_last_write_time) != 0 {
