@@ -45,6 +45,8 @@ use winapi::um::fileapi::ReadFile;
 use winapi::um::fileapi::WriteFile;
 use winapi::um::fileapi::CREATE_ALWAYS;
 use winapi::um::fileapi::OPEN_EXISTING;
+use winapi::um::wingdi::PatBlt;
+use winapi::um::wingdi::BLACKNESS;
 
 use winapi::um::handleapi::CloseHandle;
 use winapi::um::handleapi::INVALID_HANDLE_VALUE;
@@ -818,12 +820,33 @@ fn win32_update_window(
     window_height: i32,
     buffer: &Win32OffScreenBuffer,
 ) {
+    let OffsetX = 10;
+    let OffsetY = 10;
+
     unsafe {
+        PatBlt(device_context, 0, 0, window_width, OffsetY, BLACKNESS);
+        PatBlt(
+            device_context,
+            0,
+            OffsetY + buffer.height,
+            window_width,
+            window_height,
+            BLACKNESS,
+        );
+        PatBlt(device_context, 0, 0, OffsetX, window_height, BLACKNESS);
+        PatBlt(
+            device_context,
+            OffsetX + buffer.width,
+            0,
+            window_width,
+            window_height,
+            BLACKNESS,
+        );
         //blit 1 to 1 for learning how to code renderer, no scaling
         StretchDIBits(
             device_context,
-            0,
-            0,
+            OffsetX,
+            OffsetY,
             buffer.width,
             buffer.height,
             0,
