@@ -17,9 +17,7 @@ typedef double real64;
 
 */
 type bool32 = i32;
-use std::convert::TryInto;
-use std::ffi::c_void;
-use std::ptr::null_mut;
+use std::{convert::TryInto, ffi::c_void, ptr::null_mut};
 pub struct GameOffScreenBuffer {
     pub memory: *mut c_void,
     pub width: i32,
@@ -293,7 +291,6 @@ pub extern "C" fn game_update_and_render(
             TileHeight: 60.0,
         };
         let mut TileMaps = [[tilemap00]];
-   
 
         /*   TileMaps[0][0].Tiles = (uint32 *)Tiles00;
 
@@ -388,7 +385,11 @@ pub extern "C" fn game_update_and_render(
 
         for (row_index, row) in Tiles00.iter().enumerate() {
             for (column_index, column) in row.iter().enumerate() {
-                let tileID = GetTileValueUnchecked(&TileMap, column_index.try_into().unwrap(), row_index.try_into().unwrap());
+                let tileID = GetTileValueUnchecked(
+                    &TileMap,
+                    column_index.try_into().unwrap(),
+                    row_index.try_into().unwrap(),
+                );
                 let mut Gray = 0.5;
                 match tileID {
                     1 => Gray = 1.0,
