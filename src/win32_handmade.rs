@@ -2,103 +2,69 @@
 use core::arch::x86_64::_rdtsc;
 #[link(name = "handmade.dll")]
 use handmade::*;
-use std::ffi::CString;
-use std::mem::transmute;
-use std::str::from_utf8;
 use std::{
     convert::TryInto,
-    ffi::OsStr,
+    ffi::{CString, OsStr},
     iter::once,
-    mem::{size_of, zeroed},
+    mem::{size_of, transmute, zeroed},
     os::windows::ffi::OsStrExt,
     ptr::null_mut,
+    str::from_utf8,
 };
-use winapi::ctypes::c_void;
-use winapi::shared::guiddef::LPCGUID;
-use winapi::shared::minwindef::DWORD;
-use winapi::shared::minwindef::FALSE;
-use winapi::shared::minwindef::FILETIME;
-use winapi::shared::minwindef::HMODULE;
-use winapi::shared::minwindef::LPVOID;
-use winapi::shared::minwindef::MAX_PATH;
-use winapi::shared::mmreg::WAVEFORMATEX;
-use winapi::shared::mmreg::WAVE_FORMAT_PCM;
-use winapi::shared::ntdef::HRESULT;
-use winapi::shared::ntdef::SHORT;
-use winapi::shared::windef::POINT;
-use winapi::shared::winerror::ERROR_DEVICE_NOT_CONNECTED;
-use winapi::shared::winerror::SUCCEEDED;
-use winapi::um::dsound::DSBCAPS_PRIMARYBUFFER;
-use winapi::um::dsound::DSBPLAY_LOOPING;
-use winapi::um::dsound::DSBUFFERDESC;
-use winapi::um::dsound::DSSCL_PRIORITY;
-use winapi::um::dsound::DS_OK;
-use winapi::um::dsound::LPDIRECTSOUND;
-use winapi::um::dsound::LPDIRECTSOUNDBUFFER;
-use winapi::um::fileapi::CompareFileTime;
-use winapi::um::fileapi::CreateFileA;
-use winapi::um::fileapi::FindClose;
-use winapi::um::fileapi::FindFirstFileA;
-use winapi::um::fileapi::GetFileAttributesExA;
-use winapi::um::fileapi::GetFileSizeEx;
-use winapi::um::fileapi::ReadFile;
-use winapi::um::fileapi::WriteFile;
-use winapi::um::fileapi::CREATE_ALWAYS;
-use winapi::um::fileapi::OPEN_EXISTING;
-use winapi::um::wingdi::PatBlt;
-use winapi::um::wingdi::BLACKNESS;
+use winapi::{
+    ctypes::c_void,
+    shared::{
+        guiddef::LPCGUID,
+        minwindef::{DWORD, FALSE, FILETIME, HMODULE, LPVOID, MAX_PATH},
+        mmreg::{WAVEFORMATEX, WAVE_FORMAT_PCM},
+        ntdef::{HRESULT, SHORT},
+        windef::POINT,
+        winerror::{ERROR_DEVICE_NOT_CONNECTED, SUCCEEDED},
+    },
+    um::{
+        dsound::{
+            DSBCAPS_PRIMARYBUFFER, DSBPLAY_LOOPING, DSBUFFERDESC, DSSCL_PRIORITY, DS_OK,
+            LPDIRECTSOUND, LPDIRECTSOUNDBUFFER,
+        },
+        fileapi::{
+            CompareFileTime, CreateFileA, FindClose, FindFirstFileA, GetFileAttributesExA,
+            GetFileSizeEx, ReadFile, WriteFile, CREATE_ALWAYS, OPEN_EXISTING,
+        },
+        wingdi::{PatBlt, BLACKNESS},
+    },
+};
 
-use winapi::um::handleapi::CloseHandle;
-use winapi::um::handleapi::INVALID_HANDLE_VALUE;
-use winapi::um::libloaderapi::FreeLibrary;
-use winapi::um::libloaderapi::GetModuleFileNameA;
-use winapi::um::libloaderapi::GetModuleHandleW;
-use winapi::um::libloaderapi::GetProcAddress;
-use winapi::um::libloaderapi::LoadLibraryA;
-use winapi::um::memoryapi::MapViewOfFile;
-use winapi::um::memoryapi::VirtualAlloc;
-use winapi::um::memoryapi::VirtualFree;
-use winapi::um::memoryapi::FILE_MAP_ALL_ACCESS;
+use winapi::um::{
+    handleapi::{CloseHandle, INVALID_HANDLE_VALUE},
+    libloaderapi::{
+        FreeLibrary, GetModuleFileNameA, GetModuleHandleW, GetProcAddress, LoadLibraryA,
+    },
+    memoryapi::{MapViewOfFile, VirtualAlloc, VirtualFree, FILE_MAP_ALL_ACCESS},
+};
 
-use winapi::um::minwinbase::WIN32_FIND_DATAA;
-use winapi::um::mmsystem::TIMERR_NOERROR;
-use winapi::um::profileapi::QueryPerformanceCounter;
-use winapi::um::profileapi::QueryPerformanceFrequency;
-use winapi::um::synchapi::Sleep;
-use winapi::um::timeapi::timeBeginPeriod;
-use winapi::um::unknwnbase::LPUNKNOWN;
-use winapi::um::winbase::CopyFileA;
-use winapi::um::winbase::CreateFileMappingA;
-use winapi::um::wingdi::GetDeviceCaps;
+use winapi::um::{
+    minwinbase::WIN32_FIND_DATAA,
+    mmsystem::TIMERR_NOERROR,
+    profileapi::{QueryPerformanceCounter, QueryPerformanceFrequency},
+    synchapi::Sleep,
+    timeapi::timeBeginPeriod,
+    unknwnbase::LPUNKNOWN,
+    winbase::{CopyFileA, CreateFileMappingA},
+    wingdi::GetDeviceCaps,
+};
 
-use winapi::um::wingdi::VREFRESH;
-use winapi::um::winnt::LARGE_INTEGER_u;
-use winapi::um::winnt::RtlCopyMemory;
-use winapi::um::winnt::FILE_SHARE_READ;
-use winapi::um::winnt::GENERIC_READ;
-use winapi::um::winnt::GENERIC_WRITE;
-use winapi::um::winnt::HANDLE;
-use winapi::um::winnt::LARGE_INTEGER;
-use winapi::um::winnt::MEM_RESERVE;
-use winapi::um::winuser::wsprintfA;
-use winapi::um::winuser::GetCursorPos;
-use winapi::um::winuser::GetDC;
-use winapi::um::winuser::GetKeyState;
-use winapi::um::winuser::PeekMessageW;
-use winapi::um::winuser::ReleaseDC;
-use winapi::um::winuser::ScreenToClient;
-use winapi::um::winuser::PM_REMOVE;
-use winapi::um::winuser::VK_LBUTTON;
-use winapi::um::winuser::VK_MBUTTON;
-use winapi::um::winuser::VK_RBUTTON;
-use winapi::um::winuser::VK_XBUTTON1;
-use winapi::um::winuser::VK_XBUTTON2;
-use winapi::um::winuser::WM_QUIT;
+use winapi::um::{
+    wingdi::VREFRESH,
+    winnt::{
+        LARGE_INTEGER_u, RtlCopyMemory, FILE_SHARE_READ, GENERIC_READ, GENERIC_WRITE, HANDLE,
+        LARGE_INTEGER, MEM_RESERVE,
+    },
+    winuser::{
+        wsprintfA, GetCursorPos, GetDC, GetKeyState, PeekMessageW, ReleaseDC, ScreenToClient,
+        PM_REMOVE, VK_LBUTTON, VK_MBUTTON, VK_RBUTTON, VK_XBUTTON1, VK_XBUTTON2, WM_QUIT,
+    },
+};
 
-use winapi::um::xinput::XINPUT_GAMEPAD_LEFT_THUMB_DEADZONE;
-use winapi::um::xinput::XINPUT_STATE;
-use winapi::um::xinput::XINPUT_VIBRATION;
-use winapi::um::xinput::XUSER_MAX_COUNT;
 use winapi::{
     shared::{
         minwindef::{HINSTANCE, LPARAM, LRESULT, UINT, WPARAM},
@@ -115,6 +81,9 @@ use winapi::{
             PAINTSTRUCT, VK_DOWN, VK_ESCAPE, VK_F4, VK_LEFT, VK_RIGHT, VK_SPACE, VK_UP,
             WM_ACTIVATEAPP, WM_CLOSE, WM_DESTROY, WM_KEYDOWN, WM_KEYUP, WM_PAINT, WM_SIZE,
             WM_SYSKEYDOWN, WM_SYSKEYUP, WNDCLASSW, WS_OVERLAPPEDWINDOW, WS_VISIBLE,
+        },
+        xinput::{
+            XINPUT_GAMEPAD_LEFT_THUMB_DEADZONE, XINPUT_STATE, XINPUT_VIBRATION, XUSER_MAX_COUNT,
         },
     },
 };
@@ -1390,7 +1359,8 @@ pub unsafe extern "system" fn winmain() {
 
                 #[cfg(feature = "handmade_internal")]
                 {
-                    base_address = (2 * 1024 * 1024 * 1024 * 1024 as u64) as LPVOID; //2 terabytes
+                    base_address = (2 * 1024 * 1024 * 1024 * 1024 as u64) as LPVOID;
+                    //2 terabytes
                 }
 
                 RUNNING = true; // TODO
