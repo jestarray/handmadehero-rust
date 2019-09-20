@@ -1422,11 +1422,13 @@ pub unsafe extern "system" fn winmain() {
                     ReplayBuffer.FileName = dest; // STORE DEST INTO AN ARRAY, THE LOOP THROUGH DEST AND ASSIGN IT TO REPLAYBUFFER IN DIFFERENT MUTABLE LOOP
                 } */
 
-                for (ReplayIndex, ReplayBuffer) in State.ReplayBuffers.iter_mut().enumerate()
+                let mut ReplayIndex = 1;
+                for (ReplayBuffer) in State.ReplayBuffers.iter_mut()
                 /* (int ReplayIndex = 0;
                 ReplayIndex < ArrayCount(Win32State.ReplayBuffers);
                 ++ReplayIndex) */
                 {
+                    ReplayIndex += 1;
                     //let ReplayBuffer = &mut State.ReplayBuffers[ReplayIndex];
 
                     // TODO(casey): Recording system still seems to take too long

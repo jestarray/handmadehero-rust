@@ -16,7 +16,13 @@ typedef float real32;
 typedef double real64;
 
 */
+type memory_index = usize;
 type bool32 = i32;
+mod handmade_intrinsics;
+use core::mem::size_of;
+use handmade_intrinsics::*;
+mod handmade_tile;
+use handmade_tile::*;
 use std::{convert::TryInto, ffi::c_void, ptr::null_mut};
 pub struct GameOffScreenBuffer {
     pub memory: *mut c_void,
@@ -44,26 +50,6 @@ pub struct GameInput {
 #[derive(Default)]
 pub struct thread_context {
     pub place_hodler: i32,
-}
-
-struct tile_map {
-    pub CountX: i32,
-    pub CountY: i32,
-
-    pub UpperLeftX: f32,
-    pub UpperLeftY: f32,
-    pub TileWidth: f32,
-    pub TileHeight: f32,
-
-    pub Tiles: *const u32, //look into making it so type implements trait Sized?
-}
-
-struct world {
-    // TODO(casey): Beginner's sparseness
-    pub TileMapCountX: i32,
-    pub TileMapCountY: i32,
-
-    pub TileMaps: *const tile_map,
 }
 
 #[derive(Default)]
@@ -124,10 +110,55 @@ pub struct GameButtonState {
     pub ended_down: i32,
 }
 #[derive(Default)]
-pub struct GameState {
-    pub PlayerX: f32,
-    pub PlayerY: f32,
+struct world<'a> {
+    TileMap: Option<&'a mut tile_map<'a>>,
 }
+
+struct memory_arena {
+    Size: memory_index,
+    Base: *mut u8,
+    Used: memory_index,
+}
+impl Default for memory_arena {
+    fn default() -> Self {
+        memory_arena {
+            Size: 0,
+            Base: 0 as *mut u8,
+            Used: 0,
+        }
+    }
+}
+#[derive(Default)]
+pub struct GameState<'a> {
+    WorldArena: memory_arena,
+    world: Option<&'a mut world<'a>>,
+    PlayerP: tile_map_position,
+}
+
+fn InitializeArena(Arena: &mut memory_arena, Size: memory_index, Base: *mut u8) {
+    Arena.Size = Size;
+    Arena.Base = Base;
+    Arena.Used = 0;
+}
+
+/* #define PushStruct(Arena, type) (type *)PushSize_(Arena, sizeof(type))
+#define PushArray(Arena, Count, type) (type *)PushSize_(Arena, (Count)*sizeof(type)) */
+
+// can remove Size and be called with PushStruct::<TileMap>(&memory_arena)
+unsafe fn PushStruct<T>(arena: &mut memory_arena) -> *mut T {
+    PushSize_(arena, size_of::<T>()) as *mut T
+}
+unsafe fn PushArray<T>(arena: &mut memory_arena, count: u32) -> *mut T {
+    PushSize_(arena, size_of::<T>()) as *mut T
+}
+unsafe fn PushSize_(Arena: &mut memory_arena, Size: memory_index) -> *mut u8 {
+    //Assert((Arena->Used + Size) <= Arena->Size);
+    let result = Arena.Base.offset(Arena.Used.try_into().unwrap());
+    Arena.Used += Size;
+
+    return result;
+}
+
 pub struct GameMemory {
     pub is_initalized: i32,
     pub permanent_storage_size: u64,
@@ -150,77 +181,6 @@ pub struct DebugReadFile {
     pub content_size: u32,
     pub contents: *mut c_void,
 }
-
-unsafe fn GetTileMap(World: &world, TileMapX: i32, TileMapY: i32) -> *mut tile_map {
-    let mut TileMap = 0 as *mut tile_map;
-
-    if (TileMapX >= 0)
-        && (TileMapX < World.TileMapCountX)
-        && (TileMapY >= 0)
-        && (TileMapY < World.TileMapCountY.try_into().unwrap())
-    {
-        TileMap = World.TileMaps.offset(
-            (TileMapY * World.TileMapCountX + TileMapX)
-                .try_into()
-                .unwrap(),
-        ) as *mut tile_map;
-    }
-
-    return TileMap;
-}
-
-unsafe fn GetTileValueUnchecked(TileMap: &tile_map, TileX: i32, TileY: i32) -> u32 {
-    let TileMapValue = TileMap
-        .Tiles
-        .offset((TileY * TileMap.CountX + TileX).try_into().unwrap());
-    return *TileMapValue;
-}
-
-unsafe fn IsTileMapPointEmpty(TileMap: &tile_map, TestX: f32, TestY: f32) -> bool32 {
-    let mut Empty: bool32 = false as i32;
-
-    let PlayerTileX = ((TestX - TileMap.UpperLeftX) / TileMap.TileWidth) as i32;
-    let PlayerTileY = ((TestY - TileMap.UpperLeftY) / TileMap.TileHeight) as i32;
-
-    if (PlayerTileX >= 0)
-        && (PlayerTileX < TileMap.CountX)
-        && (PlayerTileY >= 0)
-        && (PlayerTileY < TileMap.CountY)
-    {
-        let TileMapValue = GetTileValueUnchecked(&TileMap, PlayerTileX, PlayerTileY);
-        Empty = (TileMapValue == 0) as i32;
-    }
-
-    return Empty;
-}
-
-unsafe fn IsWorldPointEmpty(
-    World: &world,
-    TileMapX: i32,
-    TileMapY: i32,
-    TestX: f32,
-    TestY: f32,
-) -> bool32 {
-    let mut Empty: bool32 = false as bool32;
-
-    let TileMap = GetTileMap(World, TileMapX, TileMapY);
-    if TileMap != null_mut() {
-        let PlayerTileX = ((TestX - (*TileMap).UpperLeftX) / (*TileMap).TileWidth) as i32;
-        let PlayerTileY = ((TestY - (*TileMap).UpperLeftY) / (*TileMap).TileHeight) as i32;
-
-        if (PlayerTileX >= 0)
-            && (PlayerTileX < (*TileMap).CountX)
-            && (PlayerTileY >= 0)
-            && (PlayerTileY < (*TileMap).CountY)
-        {
-            let TileMapValue = GetTileValueUnchecked(&(*TileMap), PlayerTileX, PlayerTileY);
-            Empty = (TileMapValue == 0) as bool32;
-        }
-    }
-
-    return Empty;
-}
-
 #[no_mangle]
 pub extern "C" fn game_update_and_render(
     thread: &thread_context,
@@ -229,110 +189,182 @@ pub extern "C" fn game_update_and_render(
     mut buffer: &mut GameOffScreenBuffer,
 ) {
     unsafe {
-        let TILE_MAP_COUNT_X = 17;
-        let TILE_MAP_COUNT_Y = 9;
-        //[9][17]
-        let Tiles00 = [
-            [1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1],
-            [1, 1, 0, 0, 0, 1, 0, 0, 0, 0, 0, 0, 0, 1, 0, 0, 1],
-            [1, 1, 0, 0, 0, 0, 0, 0, 1, 0, 0, 0, 0, 0, 1, 0, 1],
-            [1, 0, 0, 0, 0, 0, 0, 0, 1, 0, 0, 0, 0, 0, 0, 0, 1],
-            [1, 0, 0, 0, 0, 1, 0, 0, 1, 0, 0, 0, 0, 0, 0, 0, 0],
-            [1, 1, 0, 0, 0, 1, 0, 0, 1, 0, 0, 0, 0, 1, 0, 0, 1],
-            [1, 0, 0, 0, 0, 1, 0, 0, 1, 0, 0, 0, 1, 0, 0, 0, 1],
-            [1, 1, 1, 1, 1, 0, 0, 0, 0, 0, 0, 0, 0, 1, 0, 0, 1],
-            [1, 1, 1, 1, 1, 1, 1, 1, 0, 1, 1, 1, 1, 1, 1, 1, 1],
-        ];
+        let PlayerHeight: f32 = 1.4;
+        let PlayerWidth: f32 = 0.75 * PlayerHeight;
 
-        let Tiles01 = [
-            [1, 1, 1, 1, 1, 1, 1, 1, 0, 1, 1, 1, 1, 1, 1, 1, 1],
-            [1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1],
-            [1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1],
-            [1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1],
-            [1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0],
-            [1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1],
-            [1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1],
-            [1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1],
-            [1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1],
-        ];
+        let mut game_state = &mut *(memory.permanent_storage as *mut GameState);
+        if !(memory.is_initalized != 0) {
+            game_state.PlayerP.AbsTileX = 1;
+            game_state.PlayerP.AbsTileY = 3;
+            game_state.PlayerP.TileRelX = 5.0;
+            game_state.PlayerP.TileRelY = 5.0;
 
-        let Tiles10 = [
-            [1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1],
-            [1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1],
-            [1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1],
-            [1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1],
-            [0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1],
-            [1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1],
-            [1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1],
-            [1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1],
-            [1, 1, 1, 1, 1, 1, 1, 1, 0, 1, 1, 1, 1, 1, 1, 1, 1],
-        ];
+            InitializeArena(
+                &mut game_state.WorldArena,
+                (memory.permanent_storage_size - size_of::<GameState>() as u64)
+                    .try_into()
+                    .unwrap(),
+                (memory.permanent_storage as *mut u8)
+                    .offset(size_of::<GameState>().try_into().unwrap()),
+            );
 
-        let Tiles11 = [
-            [1, 1, 1, 1, 1, 1, 1, 1, 0, 1, 1, 1, 1, 1, 1, 1, 1],
-            [1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1],
-            [1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1],
-            [1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1],
-            [0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1],
-            [1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1],
-            [1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1],
-            [1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1],
-            [1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1],
-        ];
+            game_state.world = Some(&mut *PushStruct::<world>(&mut game_state.WorldArena));
+            let World = game_state.world.as_ref().unwrap();
+            World.TileMap = Some(&mut *PushStruct::<tile_map>(&mut game_state.WorldArena));
 
-        //  let mut TileMaps[2][2];
-        let tilemap00 = tile_map {
-            Tiles: Tiles00.as_ptr() as *mut u32,
-            CountX: TILE_MAP_COUNT_X,
-            CountY: TILE_MAP_COUNT_Y,
-            UpperLeftX: -30.0,
-            UpperLeftY: 0.0,
-            TileWidth: 60.0,
-            TileHeight: 60.0,
-        };
-        let mut TileMaps = [[tilemap00]];
+            let mut TileMap = World.TileMap.unwrap();
 
-        /*   TileMaps[0][0].Tiles = (uint32 *)Tiles00;
+            TileMap.ChunkShift = 4;
+            TileMap.ChunkMask = (1 << TileMap.ChunkShift) - 1;
+            TileMap.ChunkDim = (1 << TileMap.ChunkShift);
 
-           TileMaps[0][1] = TileMaps[0][0];
-           TileMaps[0][1].Tiles = (uint32 *)Tiles01;
+            TileMap.TileChunkCountX = 128;
+            TileMap.TileChunkCountY = 128;
+            TileMap.TileChunkCountZ = 2;
+            TileMap.TileChunks = Some(&mut *PushArray::<tile_chunk>(
+                &mut game_state.WorldArena,
+                TileMap.TileChunkCountX * TileMap.TileChunkCountY * TileMap.TileChunkCountZ,
+            ));
 
-           TileMaps[1][0] = TileMaps[0][0];
-           TileMaps[1][0].Tiles = (uint32 *)Tiles10;
+            TileMap.TileSideInMeters = 1.4;
 
-           TileMaps[1][1] = TileMaps[0][0];
-           TileMaps[1][1].Tiles = (uint32 *)Tiles11;
+            let mut RandomNumberIndex = 0;
+            let mut TilesPerWidth = 17;
+            let mut TilesPerHeight = 9;
+            let mut ScreenX = 0;
+            let mut ScreenY = 0;
+            let mut AbsTileZ = 0;
 
-           tile_map *TileMap = &TileMaps[0][0];
-        */
-        let TileMap = &TileMaps[0][0];
-        let World = world {
-            TileMapCountX: 2,
-            TileMapCountY: 2,
+            // TODO(casey): Replace all this with real world generation!
+            let mut DoorLeft = false;
+            let mut DoorRight = false;
+            let mut DoorTop = false;
+            let mut DoorBottom = false;
+            let mut DoorUp = false;
+            let mut DoorDown = false;
+            for ScreenIndex in 0..100
+            /*    (uint32 ScreenIndex = 0;
+            ScreenIndex < 100;
+            ++ScreenIndex) */
+            {
+                // TODO(casey): Random number generator!
+                // Assert(RandomNumberIndex < ArrayCount(RandomNumberTable));
 
-            TileMaps: TileMaps.as_ptr() as *mut tile_map,
-        };
+                let RandomChoice = 0;
+                if (DoorUp || DoorDown) {
+                    //RandomChoice = RandomNumberTable[RandomNumberIndex += 1] % 2;
+                } else {
+                    //RandomChoice = RandomNumberTable[RandomNumberIndex += 1] % 3;
+                }
 
-        let mut PlayerWidth = 0.75 * TileMap.TileWidth as f32;
-        let mut PlayerHeight = TileMap.TileHeight;
-        let mut game_state = memory.permanent_storage as *mut GameState;
+                if (RandomChoice == 2) {
+                    if (AbsTileZ == 0) {
+                        DoorUp = true;
+                    } else {
+                        DoorDown = true;
+                    }
+                } else if (RandomChoice == 1) {
+                    DoorRight = true;
+                } else {
+                    DoorTop = true;
+                }
 
-        if memory.is_initalized == 0 {
-            (*game_state).PlayerX = 150.0;
-            (*game_state).PlayerY = 150.0;
-            memory.is_initalized = 1;
+                for TileY in 0..TilesPerHeight
+                /*   (uint32 TileY = 0;
+                TileY < TilesPerHeight;
+                ++TileY) */
+                {
+                    for TileX in 0..TilesPerWidth
+                    /* (uint32 TileX = 0;
+                    TileX < TilesPerWidth;
+                    ++TileX) */
+                    {
+                        let AbsTileX = ScreenX * TilesPerWidth + TileX;
+                        let AbsTileY = ScreenY * TilesPerHeight + TileY;
+
+                        let mut TileValue = 1;
+                        if ((TileX == 0) && (!DoorLeft || (TileY != (TilesPerHeight / 2)))) {
+                            TileValue = 2;
+                        }
+
+                        if ((TileX == (TilesPerWidth - 1))
+                            && (!DoorRight || (TileY != (TilesPerHeight / 2))))
+                        {
+                            TileValue = 2;
+                        }
+
+                        if ((TileY == 0) && (!DoorBottom || (TileX != (TilesPerWidth / 2)))) {
+                            TileValue = 2;
+                        }
+
+                        if ((TileY == (TilesPerHeight - 1))
+                            && (!DoorTop || (TileX != (TilesPerWidth / 2))))
+                        {
+                            TileValue = 2;
+                        }
+
+                        if ((TileX == 10) && (TileY == 6)) {
+                            if (DoorUp) {
+                                TileValue = 3;
+                            }
+
+                            if (DoorDown) {
+                                TileValue = 4;
+                            }
+                        }
+
+                        SetTileValue(
+                            &mut game_state.WorldArena,
+                            World.TileMap.unwrap(),
+                            AbsTileX,
+                            AbsTileY,
+                            AbsTileZ,
+                            TileValue,
+                        );
+                    }
+                }
+
+                DoorLeft = DoorRight;
+                DoorBottom = DoorTop;
+
+                if (DoorUp) {
+                    DoorDown = true;
+                    DoorUp = false;
+                } else if (DoorDown) {
+                    DoorUp = true;
+                    DoorDown = false;
+                } else {
+                    DoorUp = false;
+                    DoorDown = false;
+                }
+
+                DoorRight = false;
+                DoorTop = false;
+
+                if (RandomChoice == 2) {
+                    if (AbsTileZ == 0) {
+                        AbsTileZ = 1;
+                    } else {
+                        AbsTileZ = 0;
+                    }
+                } else if (RandomChoice == 1) {
+                    ScreenX += 1;
+                } else {
+                    ScreenY += 1;
+                }
+            }
+
+            memory.is_initalized = true as bool32;
         }
 
-        let PlayerWidth = 0.75 * TileMap.TileWidth;
-        let PlayerHeight = TileMap.TileHeight;
+        let mut World = game_state.world.unwrap();
+        let mut TileMap = World.TileMap.unwrap();
 
-        let UpperLeftX: f32 = -30.0;
-        let UpperLeftY: f32 = 0.0;
-        let TileWidth: f32 = 60.0;
-        let TileHeight: f32 = 60.0;
+        let TileSideInPixels = 60;
+        let MetersToPixels = TileSideInPixels as f32 / TileMap.TileSideInMeters as f32;
 
-        let width = buffer.width;
-        let height = buffer.height;
+        let LowerLeftX = (-TileSideInPixels / 2) as f32;
+        let LowerLeftY = buffer.height as f32;
 
         for controller_index in 0..input.controllers.len() {
             let controller = &mut input.controllers[controller_index];
@@ -343,10 +375,10 @@ pub extern "C" fn game_update_and_render(
                 let mut dPlayerY: f32 = 0.0; // pixels/second
 
                 if controller.move_up().ended_down != 0 {
-                    dPlayerY = -1.0;
+                    dPlayerY = 1.0;
                 }
                 if controller.move_down().ended_down != 0 {
-                    dPlayerY = 1.0;
+                    dPlayerY = -1.0;
                 }
                 if controller.move_left().ended_down != 0 {
                     dPlayerX = -1.0;
@@ -358,16 +390,25 @@ pub extern "C" fn game_update_and_render(
                 dPlayerY *= 64.0;
 
                 // TODO(casey): Diagonal will be faster!  Fix once we have vectors :)
-                let NewPlayerX = (*game_state).PlayerX + input.dtForFrame * dPlayerX as f32;
-                let NewPlayerY = (*game_state).PlayerY + input.dtForFrame * dPlayerY as f32;
+                let mut NewPlayerP = game_state.PlayerP;
+                NewPlayerP.TileRelX += input.dtForFrame * dPlayerX;
+                NewPlayerP.TileRelY += input.dtForFrame * dPlayerY;
+                NewPlayerP = RecanonicalizePosition(TileMap, NewPlayerP);
+                // TODO(casey): Delta function that auto-recanonicalizes
 
-                if IsTileMapPointEmpty(&TileMap, NewPlayerX - 0.5 * PlayerWidth, NewPlayerY) != 0
-                    && IsTileMapPointEmpty(&TileMap, NewPlayerX + 0.5 * PlayerWidth, NewPlayerY)
-                        != 0
-                    && IsTileMapPointEmpty(&TileMap, NewPlayerX, NewPlayerY) != 0
+                let mut PlayerLeft = NewPlayerP;
+                PlayerLeft.TileRelX -= 0.5 * PlayerWidth;
+                PlayerLeft = RecanonicalizePosition(TileMap, PlayerLeft);
+
+                let mut PlayerRight = NewPlayerP;
+                PlayerRight.TileRelX += 0.5 * PlayerWidth;
+                PlayerRight = RecanonicalizePosition(TileMap, PlayerRight);
+
+                if IsTileMapPointEmpty(TileMap, NewPlayerP)
+                    && IsTileMapPointEmpty(TileMap, PlayerLeft)
+                    && IsTileMapPointEmpty(TileMap, PlayerRight)
                 {
-                    (*game_state).PlayerX = NewPlayerX;
-                    (*game_state).PlayerY = NewPlayerY;
+                    game_state.PlayerP = NewPlayerP;
                 }
             }
         }
@@ -376,45 +417,70 @@ pub extern "C" fn game_update_and_render(
             &mut buffer,
             0.0,
             0.0,
-            width as f32,
-            height as f32,
+            buffer.width as f32,
+            buffer.height as f32,
             1.0,
             0.0,
             0.1,
         );
 
-        for (row_index, row) in Tiles00.iter().enumerate() {
-            for (column_index, column) in row.iter().enumerate() {
-                let tileID = GetTileValueUnchecked(
-                    &TileMap,
-                    column_index.try_into().unwrap(),
-                    row_index.try_into().unwrap(),
-                );
-                let mut Gray = 0.5;
-                match tileID {
-                    1 => Gray = 1.0,
-                    _ => {}
+        let ScreenCenterX = 0.5 * buffer.width as f32;
+        let ScreenCenterY = 0.5 * buffer.height as f32;
+
+        for RelRow in -10..10
+        /*     (int32 RelRow = -10;
+        RelRow < 10;
+        ++RelRow) */
+        {
+            for RelColumn in -20..20
+            /*       (int32 RelColumn = -20;
+            RelColumn < 20;
+            ++RelColumn) */
+            {
+                let Column = (game_state.PlayerP.AbsTileX as i32 + RelColumn as i32) as u32;
+                let Row = (game_state.PlayerP.AbsTileY as i32 + RelRow as i32) as u32;
+                let TileID = GetTileValue(TileMap, Column, Row, game_state.PlayerP.AbsTileZ);
+
+                if (TileID > 0) {
+                    let mut Gray = 0.5;
+                    if (TileID == 2) {
+                        Gray = 1.0;
+                    }
+
+                    if (TileID > 2) {
+                        Gray = 0.25;
+                    }
+
+                    if ((Column == game_state.PlayerP.AbsTileX)
+                        && (Row == game_state.PlayerP.AbsTileY))
+                    {
+                        Gray = 0.0;
+                    }
+
+                    let CenX = ScreenCenterX - MetersToPixels * game_state.PlayerP.TileRelX
+                        + (RelColumn as f32) * TileSideInPixels as f32;
+                    let CenY = ScreenCenterY + MetersToPixels * game_state.PlayerP.TileRelY
+                        - (RelRow as f32) * TileSideInPixels as f32;
+                    let MinX = CenX - 0.5 * TileSideInPixels as f32;
+                    let MinY = CenY - 0.5 * TileSideInPixels as f32;
+                    let MaxX = CenX + 0.5 * TileSideInPixels as f32;
+                    let MaxY = CenY + 0.5 * TileSideInPixels as f32;
+                    DrawRectangle(buffer, MinX, MinY, MaxX, MaxY, Gray, Gray, Gray);
                 }
-                let mut MinX = TileMap.UpperLeftX + (column_index as f32) * TileWidth;
-                let mut MinY = TileMap.UpperLeftY + (row_index as f32) * TileHeight;
-                let mut MaxX = MinX + TileMap.TileWidth;
-                let mut MaxY = MinY + TileMap.TileHeight;
-                DrawRectangle(buffer, MinX, MinY, MaxX, MaxY, Gray, Gray, Gray);
             }
         }
+
         let PlayerR = 1.0;
         let PlayerG = 1.0;
-        let mut PlayerB = 0.0;
-
-        let mut PlayerLeft = (*game_state).PlayerX - 0.5 * PlayerWidth;
-        let mut PlayerTop = (*game_state).PlayerY - PlayerHeight as f32;
-
+        let PlayerB = 0.0;
+        let PlayerLeft = ScreenCenterX - 0.5 * MetersToPixels * PlayerWidth;
+        let PlayerTop = ScreenCenterY - MetersToPixels * PlayerHeight;
         DrawRectangle(
             buffer,
             PlayerLeft,
             PlayerTop,
-            PlayerLeft + PlayerWidth,
-            PlayerTop + PlayerHeight as f32,
+            PlayerLeft + MetersToPixels * PlayerWidth,
+            PlayerTop + MetersToPixels * PlayerHeight,
             PlayerR,
             PlayerG,
             PlayerB,
