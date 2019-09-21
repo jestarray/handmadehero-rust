@@ -16,6 +16,7 @@ typedef float real32;
 typedef double real64;
 
 */
+#![allow(bad_style)]
 type memory_index = usize;
 type bool32 = i32;
 mod handmade_intrinsics;
@@ -24,6 +25,10 @@ use handmade_intrinsics::*;
 mod handmade_tile;
 use handmade_tile::*;
 use std::{convert::TryInto, ffi::c_void, ptr::null_mut};
+mod handmade_random;
+use crate::handmade_random::RandomNumberTable;
+use handmade_random::*;
+
 pub struct GameOffScreenBuffer {
     pub memory: *mut c_void,
     pub width: i32,
@@ -109,16 +114,25 @@ pub struct GameButtonState {
     pub half_transition_count: i32,
     pub ended_down: i32,
 }
-#[derive(Default)]
-struct world<'a> {
-    TileMap: Option<&'a mut tile_map<'a>>,
+struct world {
+    TileMap: *mut tile_map,
 }
 
-struct memory_arena {
+impl Default for world {
+    fn default() -> Self {
+        world {
+            TileMap: 0 as *mut tile_map,
+        }
+    }
+}
+
+#[derive(Debug)]
+pub struct memory_arena {
     Size: memory_index,
     Base: *mut u8,
     Used: memory_index,
 }
+
 impl Default for memory_arena {
     fn default() -> Self {
         memory_arena {
@@ -128,11 +142,20 @@ impl Default for memory_arena {
         }
     }
 }
-#[derive(Default)]
-pub struct GameState<'a> {
+pub struct GameState {
     WorldArena: memory_arena,
-    world: Option<&'a mut world<'a>>,
+    world: *mut world,
     PlayerP: tile_map_position,
+}
+
+impl Default for GameState {
+    fn default() -> Self {
+        GameState {
+            WorldArena: memory_arena::default(),
+            world: 0 as *mut world,
+            PlayerP: tile_map_position::default(),
+        }
+    }
 }
 
 fn InitializeArena(Arena: &mut memory_arena, Size: memory_index, Base: *mut u8) {
@@ -149,13 +172,12 @@ unsafe fn PushStruct<T>(arena: &mut memory_arena) -> *mut T {
     PushSize_(arena, size_of::<T>()) as *mut T
 }
 unsafe fn PushArray<T>(arena: &mut memory_arena, count: u32) -> *mut T {
-    PushSize_(arena, size_of::<T>()) as *mut T
+    PushSize_(arena, count as usize * size_of::<T>()) as *mut T
 }
 unsafe fn PushSize_(Arena: &mut memory_arena, Size: memory_index) -> *mut u8 {
     //Assert((Arena->Used + Size) <= Arena->Size);
     let result = Arena.Base.offset(Arena.Used.try_into().unwrap());
     Arena.Used += Size;
-
     return result;
 }
 
@@ -208,23 +230,23 @@ pub extern "C" fn game_update_and_render(
                     .offset(size_of::<GameState>().try_into().unwrap()),
             );
 
-            game_state.world = Some(&mut *PushStruct::<world>(&mut game_state.WorldArena));
-            let World = game_state.world.as_ref().unwrap();
-            World.TileMap = Some(&mut *PushStruct::<tile_map>(&mut game_state.WorldArena));
+            game_state.world = PushStruct::<world>(&mut game_state.WorldArena);
+            let World = &mut *game_state.world;
+            World.TileMap = PushStruct::<tile_map>(&mut game_state.WorldArena);
 
-            let mut TileMap = World.TileMap.unwrap();
+            let mut TileMap = &mut *World.TileMap;
 
             TileMap.ChunkShift = 4;
             TileMap.ChunkMask = (1 << TileMap.ChunkShift) - 1;
-            TileMap.ChunkDim = (1 << TileMap.ChunkShift);
+            TileMap.ChunkDim = 1 << TileMap.ChunkShift;
 
             TileMap.TileChunkCountX = 128;
             TileMap.TileChunkCountY = 128;
             TileMap.TileChunkCountZ = 2;
-            TileMap.TileChunks = Some(&mut *PushArray::<tile_chunk>(
+            TileMap.TileChunks = &mut *PushArray::<tile_chunk>(
                 &mut game_state.WorldArena,
                 TileMap.TileChunkCountX * TileMap.TileChunkCountY * TileMap.TileChunkCountZ,
-            ));
+            );
 
             TileMap.TileSideInMeters = 1.4;
 
@@ -250,11 +272,13 @@ pub extern "C" fn game_update_and_render(
                 // TODO(casey): Random number generator!
                 // Assert(RandomNumberIndex < ArrayCount(RandomNumberTable));
 
-                let RandomChoice = 0;
+                let mut RandomChoice = 0;
                 if (DoorUp || DoorDown) {
-                    //RandomChoice = RandomNumberTable[RandomNumberIndex += 1] % 2;
+                    RandomNumberIndex += 1;
+                    RandomChoice = RandomNumberTable[RandomNumberIndex] % 2;
                 } else {
-                    //RandomChoice = RandomNumberTable[RandomNumberIndex += 1] % 3;
+                    RandomNumberIndex += 1;
+                    RandomChoice = RandomNumberTable[RandomNumberIndex] % 3;
                 }
 
                 if (RandomChoice == 2) {
@@ -315,7 +339,7 @@ pub extern "C" fn game_update_and_render(
 
                         SetTileValue(
                             &mut game_state.WorldArena,
-                            World.TileMap.unwrap(),
+                            World.TileMap,
                             AbsTileX,
                             AbsTileY,
                             AbsTileZ,
@@ -353,17 +377,17 @@ pub extern "C" fn game_update_and_render(
                     ScreenY += 1;
                 }
             }
-
+            dbg!("INITALIZATION SUCESS");
             memory.is_initalized = true as bool32;
         }
 
-        let mut World = game_state.world.unwrap();
-        let mut TileMap = World.TileMap.unwrap();
+        let mut World = game_state.world;
+        let mut TileMap = &mut *(*World).TileMap;
 
         let TileSideInPixels = 60;
         let MetersToPixels = TileSideInPixels as f32 / TileMap.TileSideInMeters as f32;
 
-        let LowerLeftX = (-TileSideInPixels / 2) as f32;
+        let LowerLeftX = -(TileSideInPixels / 2) as f32;
         let LowerLeftY = buffer.height as f32;
 
         for controller_index in 0..input.controllers.len() {
@@ -386,8 +410,13 @@ pub extern "C" fn game_update_and_render(
                 if controller.move_right().ended_down != 0 {
                     dPlayerX = 1.0;
                 }
-                dPlayerX *= 64.0;
-                dPlayerY *= 64.0;
+
+                let mut PlayerSpeed = 2.0;
+                if controller.action_up().ended_down != 0 {
+                    PlayerSpeed = 10.0;
+                }
+                dPlayerX *= PlayerSpeed;
+                dPlayerY *= PlayerSpeed;
 
                 // TODO(casey): Diagonal will be faster!  Fix once we have vectors :)
                 let mut NewPlayerP = game_state.PlayerP;
@@ -412,13 +441,15 @@ pub extern "C" fn game_update_and_render(
                 }
             }
         }
+        let width = buffer.width;
+        let height = buffer.height;
 
         DrawRectangle(
             &mut buffer,
             0.0,
             0.0,
-            buffer.width as f32,
-            buffer.height as f32,
+            width as f32,
+            height as f32,
             1.0,
             0.0,
             0.1,
@@ -437,8 +468,8 @@ pub extern "C" fn game_update_and_render(
             RelColumn < 20;
             ++RelColumn) */
             {
-                let Column = (game_state.PlayerP.AbsTileX as i32 + RelColumn as i32) as u32;
-                let Row = (game_state.PlayerP.AbsTileY as i32 + RelRow as i32) as u32;
+                let Column = (game_state.PlayerP.AbsTileX as u32 + RelColumn as u32);
+                let Row = (game_state.PlayerP.AbsTileY as u32 + RelRow as u32);
                 let TileID = GetTileValue(TileMap, Column, Row, game_state.PlayerP.AbsTileZ);
 
                 if (TileID > 0) {

@@ -1,4 +1,5 @@
 //#![windows_subsystem = "windows"] //comment out for cmd prompt to pop up and println! to work
+#![allow(bad_style)]
 use core::arch::x86_64::_rdtsc;
 #[link(name = "handmade.dll")]
 use handmade::*;

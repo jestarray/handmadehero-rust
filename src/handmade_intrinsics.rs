@@ -1,3 +1,4 @@
+#![allow(non_snake_case)]
 pub fn RoundReal32ToInt32(Real32: f32) -> i32 {
     let result = Real32.round() as i32;
     return (result);
@@ -9,8 +10,8 @@ pub fn RoundReal32ToUInt32(Real32: f32) -> u32 {
 }
 
 pub fn FloorReal32ToInt32(Real32: f32) -> i32 {
-    let result = (Real32.floor() as i32);
-    return (result);
+    let result = Real32.floor() as i32;
+    return result;
 }
 
 pub fn TruncateReal32ToInt32(Real32: f32) -> i32 {

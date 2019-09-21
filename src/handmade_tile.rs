@@ -1,6 +1,8 @@
 use crate::*;
 use std::convert::TryInto;
-#[derive(Default, Clone)] // does this really need to implement clone?
+
+#[derive(Default, Clone, Copy)] // must implement copy
+
 pub struct tile_map_position {
     // NOTE(casey): These are fixed point tile locations.  The high
     // bits are the tile chunk index, and the low bits are the tile
@@ -25,13 +27,12 @@ pub struct tile_chunk_position {
     pub RelTileY: u32,
 }
 
-pub struct tile_chunk<'a> {
+pub struct tile_chunk {
     // TODO(casey): Real structure for a tile!
-    pub Tiles: Option<&'a mut u32>,
+    pub Tiles: *mut u32,
 }
 
-#[derive(Default)]
-pub struct tile_map<'a> {
+pub struct tile_map {
     pub ChunkShift: u32,
     pub ChunkMask: u32,
     pub ChunkDim: u32,
@@ -43,7 +44,21 @@ pub struct tile_map<'a> {
     pub TileChunkCountX: u32,
     pub TileChunkCountY: u32,
     pub TileChunkCountZ: u32,
-    pub TileChunks: Option<&'a mut tile_chunk<'a>>,
+    pub TileChunks: *mut tile_chunk,
+}
+impl Default for tile_map {
+    fn default() -> Self {
+        tile_map {
+            ChunkShift: 0,
+            ChunkMask: 0,
+            ChunkDim: 0,
+            TileSideInMeters: 0.0,
+            TileChunkCountX: 0,
+            TileChunkCountY: 0,
+            TileChunkCountZ: 0,
+            TileChunks: 0 as *mut tile_chunk,
+        }
+    }
 }
 
 pub unsafe fn RecanonicalizeCoord(TileMap: &tile_map, mut Tile: *mut u32, TileRel: *mut f32) {
@@ -53,10 +68,8 @@ pub unsafe fn RecanonicalizeCoord(TileMap: &tile_map, mut Tile: *mut u32, TileRe
     // NOTE(casey): TileMap is assumed to be toroidal topology, if you
     // step off one end you come back on the other!
     let Offset = RoundReal32ToInt32(*TileRel / TileMap.TileSideInMeters);
-    *Tile = Offset.try_into().unwrap();
-    Tile = Tile.offset(1);
-    //*Tile += Offset;
-    *TileRel = *TileRel - Offset as f32 * TileMap.TileSideInMeters;
+    *Tile = *Tile + Offset as u32; //overflows
+    *TileRel -= Offset as f32 * TileMap.TileSideInMeters;
     //*TileRel -= Offset * TileMap.TileSideInMeters;
 
     // TODO(casey): Fix floating point math so this can be < ?
@@ -64,7 +77,10 @@ pub unsafe fn RecanonicalizeCoord(TileMap: &tile_map, mut Tile: *mut u32, TileRe
     //Assert(*TileRel <= 0.5f*TileMap.TileSideInMeters);
 }
 
-pub unsafe fn RecanonicalizePosition(TileMap: &tile_map, Pos: tile_map_position) -> tile_map_position {
+pub unsafe fn RecanonicalizePosition(
+    TileMap: &tile_map,
+    Pos: tile_map_position,
+) -> tile_map_position {
     let mut result = Pos;
 
     RecanonicalizeCoord(TileMap, &mut result.AbsTileX, &mut result.TileRelX);
@@ -74,15 +90,15 @@ pub unsafe fn RecanonicalizePosition(TileMap: &tile_map, Pos: tile_map_position)
 }
 
 //inline tile_chunk *
-pub unsafe fn GetTileChunk<'a>(
-    TileMap: &'a tile_map<'a>,
+pub unsafe fn GetTileChunk(
+    TileMap: *mut tile_map,
     TileChunkX: u32,
     TileChunkY: u32,
     TileChunkZ: u32,
-) -> &'a mut tile_chunk<'a> {
-   //let mut TileChunk= 0 as *mut tile_chunk; 
-    let mut TileChunk = (&TileMap.TileChunks).unwrap();
-
+) -> *mut tile_chunk {
+    //let mut TileChunk= 0 as *mut tile_chunk;
+    let mut TileChunk = (*TileMap).TileChunks;
+    let TileMap = &mut *TileMap;
     if (TileChunkX >= 0)
         && (TileChunkX < TileMap.TileChunkCountX)
         && (TileChunkY >= 0)
@@ -90,33 +106,26 @@ pub unsafe fn GetTileChunk<'a>(
         && (TileChunkZ >= 0)
         && (TileChunkZ < TileMap.TileChunkCountZ)
     {
-        match TileMap.TileChunks {
-            Some(chunk) => {
-                let temp = (chunk as *mut tile_chunk).offset(
-                    (TileChunkZ * TileMap.TileChunkCountY * TileMap.TileChunkCountX
-                        + TileChunkY * TileMap.TileChunkCountX
-                        + TileChunkX)
-                        .try_into()
-                        .unwrap(),
-                );
-                unsafe {
-                    TileChunk = &mut *temp;
-                }
-            }
-            _ => {}
-        }
-        /*     TileChunk = &TileMap.TileChunks.offset(
-        TileChunkZ*TileMap.TileChunkCountY*TileMap.TileChunkCountX +
-        TileChunkY*TileMap.TileChunkCountX +
-        TileChunkX); */
+        let temp = TileChunk.offset(
+            (TileChunkZ * TileMap.TileChunkCountY * TileMap.TileChunkCountX
+                + TileChunkY * TileMap.TileChunkCountX
+                + TileChunkX)
+                .try_into()
+                .unwrap(),
+        );
+        TileChunk = &mut *temp;
     }
+    /*     TileChunk = &TileMap.TileChunks.offset(
+    TileChunkZ*TileMap.TileChunkCountY*TileMap.TileChunkCountX +
+    TileChunkY*TileMap.TileChunkCountX +
+    TileChunkX); */
 
     return &mut *TileChunk;
 }
 
 pub unsafe fn GetTileValueUnchecked(
-    TileMap: &tile_map,
-    TileChunk: &mut tile_chunk,
+    TileMap: *mut tile_map,
+    TileChunk: *mut tile_chunk,
     TileX: u32,
     TileY: u32,
 ) -> u32 {
@@ -124,14 +133,18 @@ pub unsafe fn GetTileValueUnchecked(
     Assert(TileX < TileMap.ChunkDim);
     Assert(TileY < TileMap.ChunkDim);
      */
-    let TileChunkValue = (TileChunk.Tiles.unwrap() as *mut u32)
+    let TileMap = &mut *TileMap;
+    let TileChunkValue = *(*TileChunk)
+        .Tiles
         .offset((TileY * TileMap.ChunkDim + TileX).try_into().unwrap());
-    return *TileChunkValue;
+    /*  let TileChunkValue = (*(*(TileChunk)).Tiles as *mut u32)
+    .offset((TileY * (*TileMap).ChunkDim + TileX).try_into().unwrap()); */
+    return TileChunkValue;
 }
 
 pub fn SetTileValueUnchecked(
-    TileMap: &tile_map,
-    TileChunk: &tile_chunk,
+    TileMap: *mut tile_map,
+    TileChunk: *mut tile_chunk,
     TileX: u32,
     TileY: u32,
     TileValue: u32,
@@ -141,54 +154,47 @@ pub fn SetTileValueUnchecked(
     Assert(TileY < TileMap.ChunkDim) */
 
     unsafe {
-        *(TileChunk.Tiles.unwrap() as *mut u32)
-            .offset((TileY * TileMap.ChunkDim + TileX).try_into().unwrap()) = TileValue;
+        *((*TileChunk).Tiles as *mut u32)
+            .offset((TileY * (*TileMap).ChunkDim + TileX).try_into().unwrap()) = TileValue;
     }
 }
 
-pub fn GetTileValue_(
-    TileMap: Option<&tile_map>,
-    TileChunk: Option<&mut tile_chunk>,
+pub unsafe fn GetTileValue_(
+    TileMap: *mut tile_map,
+    TileChunk: *mut tile_chunk,
     TestTileX: u32,
     TestTileY: u32,
 ) -> u32 {
-    let TileChunkValue = 0;
+    let mut TileChunkValue = 0;
 
-    if TileChunk.is_some() && TileChunk.unwrap().Tiles.is_some() {
-        TileChunkValue =
-            GetTileValueUnchecked(TileMap.unwrap(), TileChunk.unwrap(), TestTileX, TestTileY);
+    if TileChunk != null_mut() && (*TileChunk).Tiles != null_mut() {
+        TileChunkValue = GetTileValueUnchecked(TileMap, TileChunk, TestTileX, TestTileY);
     }
 
     return (TileChunkValue);
 }
 
-pub fn SetTileValue_(
-    TileMap: Option<&tile_map>,
-    TileChunk: Option<&tile_chunk>,
+pub unsafe fn SetTileValue_(
+    TileMap: *mut tile_map,
+    TileChunk: *mut tile_chunk,
     TestTileX: u32,
     TestTileY: u32,
     TileValue: u32,
 ) {
-    if TileChunk.is_some() && TileChunk.unwrap().Tiles.is_some() {
+    if TileChunk != null_mut() && (*TileChunk).Tiles != null_mut() {
         // can remove if check since .unwrap() does  the check
-        SetTileValueUnchecked(
-            TileMap.unwrap(),
-            TileChunk.unwrap(),
-            TestTileX,
-            TestTileY,
-            TileValue,
-        );
+        SetTileValueUnchecked(TileMap, TileChunk, TestTileX, TestTileY, TileValue);
     }
 }
 
-pub fn GetChunkPositionFor(
-    TileMap: &tile_map,
+pub unsafe fn GetChunkPositionFor(
+    TileMap: *mut tile_map,
     AbsTileX: u32,
     AbsTileY: u32,
     AbsTileZ: u32,
 ) -> tile_chunk_position {
     let mut result = tile_chunk_position::default();
-
+    let TileMap = &mut *TileMap;
     result.TileChunkX = AbsTileX >> TileMap.ChunkShift;
     result.TileChunkY = AbsTileY >> TileMap.ChunkShift;
     result.TileChunkZ = AbsTileZ;
@@ -198,8 +204,8 @@ pub fn GetChunkPositionFor(
     return result;
 }
 
-pub unsafe fn GetTileValue<'a>(
-    TileMap: &'a tile_map<'a>,
+pub unsafe fn GetTileValue(
+    TileMap: *mut tile_map,
     AbsTileX: u32,
     AbsTileY: u32,
     AbsTileZ: u32,
@@ -213,17 +219,12 @@ pub unsafe fn GetTileValue<'a>(
         ChunkPos.TileChunkY,
         ChunkPos.TileChunkZ,
     );
-    let TileChunkValue = GetTileValue_(
-        Some(TileMap),
-        Some(TileChunk),
-        ChunkPos.RelTileX,
-        ChunkPos.RelTileY,
-    );
+    let TileChunkValue = GetTileValue_(TileMap, TileChunk, ChunkPos.RelTileX, ChunkPos.RelTileY);
 
     return TileChunkValue;
 }
 
-pub unsafe fn IsTileMapPointEmpty<'a>(TileMap: &'a tile_map<'a>, CanPos: tile_map_position) -> bool {
+pub unsafe fn IsTileMapPointEmpty(TileMap: *mut tile_map, CanPos: tile_map_position) -> bool {
     let TileChunkValue = GetTileValue(TileMap, CanPos.AbsTileX, CanPos.AbsTileY, CanPos.AbsTileZ);
     let Empty = TileChunkValue == 1;
 
@@ -231,9 +232,9 @@ pub unsafe fn IsTileMapPointEmpty<'a>(TileMap: &'a tile_map<'a>, CanPos: tile_ma
 }
 
 // function overloading
-pub unsafe fn SetTileValue<'a>(
-    Arena: &mut memory_arena,
-    TileMap: &'a tile_map<'a>,
+pub unsafe fn SetTileValue(
+    Arena: *mut memory_arena,
+    TileMap: *mut tile_map,
     AbsTileX: u32,
     AbsTileY: u32,
     AbsTileZ: u32,
@@ -248,21 +249,22 @@ pub unsafe fn SetTileValue<'a>(
     );
 
     //Assert(TileChunk);
-    if TileChunk.Tiles.is_none() {
-        let TileCount = TileMap.ChunkDim * TileMap.ChunkDim;
-        TileChunk.Tiles = Some(&mut (*PushArray::<u32>(Arena, TileCount)));
+    if !((*TileChunk).Tiles != null_mut()) {
+        let TileCount = (*TileMap).ChunkDim * (*TileMap).ChunkDim;
+        (*TileChunk).Tiles = &mut (*PushArray::<u32>(&mut *Arena, TileCount));
         for TileIndex in 0..TileCount
         /*   (let TileIndex = 0;
         TileIndex < TileCount;
         ++TileIndex) */
         {
-            *(TileChunk.Tiles.unwrap() as *mut u32).offset(TileIndex.try_into().unwrap()) = 1;
+            *((*TileChunk).Tiles as *mut u32).offset(TileIndex.try_into().unwrap()) = 1;
         }
+    } else {
     }
 
     SetTileValue_(
-        Some(TileMap),
-        Some(TileChunk),
+        TileMap,
+        TileChunk,
         ChunkPos.RelTileX,
         ChunkPos.RelTileY,
         TileValue,
