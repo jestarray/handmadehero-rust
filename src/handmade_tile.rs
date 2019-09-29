@@ -289,7 +289,7 @@ pub fn Subtract(
     };
     let dTileZ = A.AbsTileZ as f32 - B.AbsTileZ as f32;
 
-    result.dXY = dTileXY + (A.Offset - B.Offset) * TileMap.TileSideInMeters;
+    result.dXY = TileMap.TileSideInMeters * dTileXY + (A.Offset - B.Offset);
     // TODO(casey): Think about what we want to do about Z
     result.dZ = TileMap.TileSideInMeters * dTileZ;
 

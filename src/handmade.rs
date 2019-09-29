@@ -520,7 +520,6 @@ pub extern "C" fn game_update_and_render(
             );
             Bitmap.AlignX = 72;
             Bitmap.AlignY = 182;
-            //Bitmap = &mut game_state.HeroBitmaps[4];
 
             game_state.CameraP.AbsTileX = 17 / 2;
             game_state.CameraP.AbsTileY = 9 / 2;
@@ -714,11 +713,9 @@ pub extern "C" fn game_update_and_render(
                     game_state.HeroFacingDirection = 2;
                     dPlayer.X = -1.0;
                 }
-                let mut is_moving = false;
                 if controller.move_right().ended_down != 0 {
                     game_state.HeroFacingDirection = 0;
                     dPlayer.X = 1.0;
-                    is_moving = true;
                 }
 
                 let mut PlayerSpeed = 2.0;
@@ -761,9 +758,6 @@ pub extern "C" fn game_update_and_render(
                         }
                     }
                     game_state.PlayerP = NewPlayerP;
-                }
-                if is_moving {
-                    dbg!(NewPlayerP);
                 }
 
                 game_state.CameraP.AbsTileZ = game_state.PlayerP.AbsTileZ;

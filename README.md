@@ -25,3 +25,4 @@ ep38 1:29:00 linear alpha blend, one of the most important math equations in gam
 
 # bugs:
 * replay is not playing back from recorded game state
+* fullscreen does not work, see line 1047

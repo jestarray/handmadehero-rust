@@ -100,7 +100,7 @@ use winapi::{
         winuser::{
             BeginPaint, CreateWindowExW, DefWindowProcW, DispatchMessageW, EndPaint, GetClientRect,
             RegisterClassW, TranslateMessage, CS_HREDRAW, CS_VREDRAW, CW_USEDEFAULT, MSG,
-            PAINTSTRUCT, VK_DOWN, VK_ESCAPE, VK_F4, VK_LEFT, VK_RIGHT, VK_SPACE, VK_UP,
+            PAINTSTRUCT, VK_DOWN, VK_ESCAPE, VK_F4, VK_LEFT, VK_RETURN, VK_RIGHT, VK_SPACE, VK_UP,
             WM_ACTIVATEAPP, WM_CLOSE, WM_DESTROY, WM_KEYDOWN, WM_KEYUP, WM_PAINT, WM_SIZE,
             WM_SYSKEYDOWN, WM_SYSKEYUP, WNDCLASSW, WS_OVERLAPPEDWINDOW, WS_VISIBLE,
         },
@@ -841,6 +841,7 @@ unsafe fn win32_display_buffer_in_window(
     buffer: &Win32OffScreenBuffer,
 ) {
     if (window_width >= buffer.width * 2) && (window_height >= buffer.height * 2) {
+        dbg!("RUNNING");
         StretchDIBits(
             device_context,
             0,
@@ -1043,6 +1044,7 @@ unsafe fn ToggleFullscreen(Window: HWND) {
         let mut MonitorInfo = zeroed::<MONITORINFO>();
         if GetWindowPlacement(Window, &mut GlobalWindowPosition) != 0
             && GetMonitorInfoA(
+                //getmonitorinfo failing for fullscreen
                 MonitorFromWindow(Window, MONITOR_DEFAULTTOPRIMARY),
                 &mut MonitorInfo,
             ) != 0
@@ -1196,13 +1198,14 @@ unsafe fn win32_process_pending_messages(
                                 RUNNING = false;
                             }
                         }
-                        /*  VK_RETURN => {
+                        VK_RETURN => {
+                            //enter
                             if alt_is_down {
                                 if message.hwnd != null_mut() {
                                     ToggleFullscreen(message.hwnd);
                                 }
                             }
-                        } */
+                        }
                         _ => {}
                     }
                 };
