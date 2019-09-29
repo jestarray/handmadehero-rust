@@ -59,7 +59,7 @@ impl Default for tile_map {
     }
 }
 
-pub unsafe fn RecanonicalizeCoord(TileMap: &tile_map, Tile: *mut u32, TileRel: *mut f32) {
+pub unsafe fn RecanonicalizeCoord(TileMap: &tile_map, Tile: &mut u32, TileRel: &mut f32) {
     // TODO(casey): Need to do something that doesn't use the divide/multiply method
     // for recanonicalizing because this can end up rounding back on to the tile
     // you just came from.

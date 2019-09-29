@@ -173,7 +173,7 @@ pub struct GameState {
 
     Backdrop: loaded_bitmap,
     HeroFacingDirection: u32,
-    HeroBitmaps: [hero_bitmaps; 5],
+    HeroBitmaps: [hero_bitmaps; 4],
 }
 
 impl Default for GameState {
@@ -187,7 +187,6 @@ impl Default for GameState {
             Backdrop: loaded_bitmap::default(),
             HeroFacingDirection: 0,
             HeroBitmaps: [
-                hero_bitmaps::default(),
                 hero_bitmaps::default(),
                 hero_bitmaps::default(),
                 hero_bitmaps::default(),
