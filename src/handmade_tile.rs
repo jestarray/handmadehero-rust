@@ -1,7 +1,7 @@
 use crate::*;
 use std::convert::TryInto;
 
-#[derive(Default, Clone, Copy)] // must implement copy
+#[derive(Default, Clone, Copy, Debug)] // must implement copy
 
 pub struct tile_map_position {
     // NOTE(casey): These are fixed point tile locations.  The high
@@ -12,9 +12,7 @@ pub struct tile_map_position {
     pub AbsTileZ: u32,
 
     // TODO(casey): Should these be from the center of a tile?
-    // TODO(casey): Rename to offset X and Y
-    pub TileRelX: f32,
-    pub TileRelY: f32,
+    pub Offset: v2,
 }
 
 #[derive(Default)]
@@ -61,7 +59,7 @@ impl Default for tile_map {
     }
 }
 
-pub unsafe fn RecanonicalizeCoord(TileMap: &tile_map, mut Tile: *mut u32, TileRel: *mut f32) {
+pub unsafe fn RecanonicalizeCoord(TileMap: &tile_map, Tile: *mut u32, TileRel: *mut f32) {
     // TODO(casey): Need to do something that doesn't use the divide/multiply method
     // for recanonicalizing because this can end up rounding back on to the tile
     // you just came from.
@@ -71,7 +69,6 @@ pub unsafe fn RecanonicalizeCoord(TileMap: &tile_map, mut Tile: *mut u32, TileRe
     *Tile = *Tile + Offset as u32; //overflows
     *TileRel -= Offset as f32 * TileMap.TileSideInMeters;
     //*TileRel -= Offset * TileMap.TileSideInMeters;
-
     // TODO(casey): Fix floating point math so this can be < ?
     //Assert(*TileRel >= -0.5f*TileMap.TileSideInMeters);
     //Assert(*TileRel <= 0.5f*TileMap.TileSideInMeters);
@@ -83,8 +80,8 @@ pub unsafe fn RecanonicalizePosition(
 ) -> tile_map_position {
     let mut result = Pos;
 
-    RecanonicalizeCoord(TileMap, &mut result.AbsTileX, &mut result.TileRelX);
-    RecanonicalizeCoord(TileMap, &mut result.AbsTileY, &mut result.TileRelY);
+    RecanonicalizeCoord(TileMap, &mut result.AbsTileX, &mut result.Offset.X);
+    RecanonicalizeCoord(TileMap, &mut result.AbsTileY, &mut result.Offset.Y);
 
     return result;
 }
@@ -171,7 +168,7 @@ pub unsafe fn GetTileValue_(
         TileChunkValue = GetTileValueUnchecked(TileMap, TileChunk, TestTileX, TestTileY);
     }
 
-    return (TileChunkValue);
+    return TileChunkValue;
 }
 
 pub unsafe fn SetTileValue_(
@@ -210,8 +207,6 @@ pub unsafe fn GetTileValue(
     AbsTileY: u32,
     AbsTileZ: u32,
 ) -> u32 {
-    let Empty = false;
-
     let ChunkPos = GetChunkPositionFor(TileMap, AbsTileX, AbsTileY, AbsTileZ);
     let TileChunk = GetTileChunk(
         TileMap,
@@ -223,10 +218,15 @@ pub unsafe fn GetTileValue(
 
     return TileChunkValue;
 }
+pub unsafe fn GetTileValue_P(TileMap: *mut tile_map, Pos: tile_map_position) -> u32 {
+    let TileChunkValue = GetTileValue(TileMap, Pos.AbsTileX, Pos.AbsTileY, Pos.AbsTileZ);
+
+    return TileChunkValue;
+}
 
 pub unsafe fn IsTileMapPointEmpty(TileMap: *mut tile_map, CanPos: tile_map_position) -> bool {
     let TileChunkValue = GetTileValue(TileMap, CanPos.AbsTileX, CanPos.AbsTileY, CanPos.AbsTileZ);
-    let Empty = TileChunkValue == 1;
+    let Empty = (TileChunkValue == 1) || (TileChunkValue == 3) || (TileChunkValue == 4);
 
     return Empty;
 }
@@ -269,4 +269,36 @@ pub unsafe fn SetTileValue(
         ChunkPos.RelTileY,
         TileValue,
     );
+}
+#[derive(Default)]
+pub struct tile_map_difference {
+    pub dXY: v2,
+    pub dZ: f32,
+}
+
+pub fn Subtract(
+    TileMap: &tile_map,
+    A: &tile_map_position,
+    B: &tile_map_position,
+) -> tile_map_difference {
+    let mut result = tile_map_difference::default();
+
+    let dTileXY = v2 {
+        X: A.AbsTileX as f32 - B.AbsTileX as f32,
+        Y: A.AbsTileY as f32 - B.AbsTileY as f32,
+    };
+    let dTileZ = A.AbsTileZ as f32 - B.AbsTileZ as f32;
+
+    result.dXY = dTileXY + (A.Offset - B.Offset) * TileMap.TileSideInMeters;
+    // TODO(casey): Think about what we want to do about Z
+    result.dZ = TileMap.TileSideInMeters * dTileZ;
+
+    return result;
+}
+
+pub fn AreOnSameTile(A: &tile_map_position, B: &tile_map_position) -> bool {
+    let result =
+        (A.AbsTileX == B.AbsTileX) && (A.AbsTileY == B.AbsTileY) && (A.AbsTileZ == B.AbsTileZ);
+
+    return result;
 }

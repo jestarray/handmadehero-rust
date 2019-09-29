@@ -27,8 +27,31 @@ use handmade_tile::*;
 use std::{convert::TryInto, ffi::c_void, ptr::null_mut};
 mod handmade_random;
 use crate::handmade_random::RandomNumberTable;
-use handmade_random::*;
+mod handmade_math;
+use crate::handmade_math::v2;
+struct loaded_bitmap {
+    Width: i32,
+    Height: i32,
+    Pixels: *mut u32,
+}
 
+impl Default for loaded_bitmap {
+    fn default() -> Self {
+        loaded_bitmap {
+            Width: 0,
+            Height: 0,
+            Pixels: 0 as *mut u32,
+        }
+    }
+}
+#[derive(Default)]
+pub struct hero_bitmaps {
+    AlignX: i32,
+    AlignY: i32,
+    Head: loaded_bitmap,
+    Cape: loaded_bitmap,
+    Torso: loaded_bitmap,
+}
 pub struct GameOffScreenBuffer {
     pub memory: *mut c_void,
     pub width: i32,
@@ -146,6 +169,11 @@ pub struct GameState {
     WorldArena: memory_arena,
     world: *mut world,
     PlayerP: tile_map_position,
+    CameraP: tile_map_position,
+
+    Backdrop: loaded_bitmap,
+    HeroFacingDirection: u32,
+    HeroBitmaps: [hero_bitmaps; 5],
 }
 
 impl Default for GameState {
@@ -154,6 +182,17 @@ impl Default for GameState {
             WorldArena: memory_arena::default(),
             world: 0 as *mut world,
             PlayerP: tile_map_position::default(),
+            CameraP: tile_map_position::default(),
+
+            Backdrop: loaded_bitmap::default(),
+            HeroFacingDirection: 0,
+            HeroBitmaps: [
+                hero_bitmaps::default(),
+                hero_bitmaps::default(),
+                hero_bitmaps::default(),
+                hero_bitmaps::default(),
+                hero_bitmaps::default(),
+            ],
         }
     }
 }
@@ -203,12 +242,193 @@ pub struct DebugReadFile {
     pub content_size: u32,
     pub contents: *mut c_void,
 }
+#[repr(packed)]
+struct bitmap_header {
+    FileType: u16,
+    FileSize: u32,
+    Reserved1: u16,
+    Reserved2: u16,
+    BitmapOffset: u32,
+    Size: u32,
+    Width: i32,
+    Height: i32,
+    Planes: u16,
+    BitsPerPixel: u16,
+    Compression: u32,
+    SizeOfBitmap: u32,
+    HorzResolution: i32,
+    VertResolution: i32,
+    ColorsUsed: u32,
+    ColorsImportant: u32,
+
+    RedMask: u32,
+    GreenMask: u32,
+    BlueMask: u32,
+}
+
+fn DrawBitmap(
+    Buffer: &GameOffScreenBuffer,
+    Bitmap: &loaded_bitmap,
+    mut RealX: f32,
+    mut RealY: f32,
+    AlignX: i32,
+    AlignY: i32,
+) {
+    RealX -= AlignX as f32;
+    RealY -= AlignY as f32;
+    let mut MinX = RoundReal32ToInt32(RealX);
+    let mut MinY = RoundReal32ToInt32(RealY);
+    let mut MaxX = RoundReal32ToInt32(RealX + Bitmap.Width as f32);
+    let mut MaxY = RoundReal32ToInt32(RealY + Bitmap.Height as f32);
+
+    let mut SourceOffsetX = 0;
+    if MinX < 0 {
+        SourceOffsetX = -MinX;
+        MinX = 0;
+    }
+
+    let mut SourceOffsetY = 0;
+    if MinY < 0 {
+        SourceOffsetY = -MinY;
+        MinY = 0;
+    }
+
+    if MaxX > Buffer.width {
+        MaxX = Buffer.width;
+    }
+
+    if MaxY > Buffer.height {
+        MaxY = Buffer.height;
+    }
+
+    // TODO(casey): SourceRow needs to be changed based on clipping.
+    unsafe {
+        let mut SourceRow: *mut u32 = Bitmap
+            .Pixels
+            .offset((Bitmap.Width * (Bitmap.Height - 1)).try_into().unwrap());
+        SourceRow = SourceRow.offset(
+            (-SourceOffsetY * Bitmap.Width + SourceOffsetX)
+                .try_into()
+                .unwrap(),
+        );
+        let mut DestRow: *mut u8 = (Buffer.memory as *mut u8).offset(
+            (MinX * Buffer.bytes_per_pixel + MinY * Buffer.pitch)
+                .try_into()
+                .unwrap(),
+        );
+        for Y in MinY..MaxY
+        /*    (int Y = MinY;
+        Y < MaxY;
+        ++Y) */
+        {
+            let mut Dest: *mut u32 = DestRow as *mut u32;
+            let mut Source: *mut u32 = SourceRow;
+            for X in MinX..MaxX
+            /*    (int X = MinX;
+            X < MaxX;
+            ++X) */
+            {
+                let A = ((*Source >> 24) & 0xFF) as f32 / 255.0;
+                let SR = ((*Source >> 16) & 0xFF) as f32;
+                let SG = ((*Source >> 8) & 0xFF) as f32;
+                let SB = ((*Source >> 0) & 0xFF) as f32;
+
+                let DR = ((*Dest >> 16) & 0xFF) as f32;
+                let DG = ((*Dest >> 8) & 0xFF) as f32;
+                let DB = ((*Dest >> 0) & 0xFF) as f32;
+
+                // TODO(casey): Someday, we need to talk about premultiplied alpha!
+                // (this is not premultiplied alpha)
+                let R = (1.0 - A) * DR + A * SR;
+                let G = (1.0 - A) * DG + A * SG;
+                let B = (1.0 - A) * DB + A * SB;
+
+                *Dest = (((R + 0.5) as u32) << 16)
+                    | (((G + 0.5) as u32) << 8)
+                    | (((B + 0.5) as u32) << 0);
+
+                Dest = Dest.offset(1);
+                Source = Source.offset(1);
+                /* ++Dest;
+                ++Source; */
+            }
+
+            DestRow = DestRow.offset(Buffer.pitch.try_into().unwrap());
+            SourceRow = SourceRow.offset((-Bitmap.Width).try_into().unwrap());
+        }
+    }
+}
+
+unsafe fn DEBUGLoadBMP(
+    Thread: &thread_context,
+    ReadEntireFile: unsafe fn(thread: &thread_context, file_name: &str) -> DebugReadFile,
+    FileName: &str,
+) -> loaded_bitmap {
+    let mut result = loaded_bitmap::default();
+
+    let ReadResult = ReadEntireFile(Thread, FileName);
+    if ReadResult.content_size != 0 {
+        let Header = &mut *((ReadResult.contents) as *mut bitmap_header);
+        let Pixels: *mut u32 = ((ReadResult.contents as *mut u8)
+            .offset(Header.BitmapOffset.try_into().unwrap()))
+            as *mut u32;
+        result.Pixels = Pixels;
+        result.Width = Header.Width;
+        result.Height = Header.Height;
+
+        //Assert(Header.Compression == 3);
+
+        // NOTE(casey): If you are using this generically for some reason,
+        // please remember that BMP files CAN GO IN EITHER DIRECTION and
+        // the height will be negative for top-down.
+        // (Also, there can be compression, etc., etc... DON'T think this
+        // is complete BMP loading code because it isn't!!)
+
+        // NOTE(casey): Byte order in memory is determined by the Header itself,
+        // so we have to read out the masks and convert the pixels ourselves.
+        let RedMask = Header.RedMask;
+        let GreenMask = Header.GreenMask;
+        let BlueMask = Header.BlueMask;
+        let AlphaMask = !(RedMask | GreenMask | BlueMask);
+        let RedShift = FindLeastSignificantSetBit(RedMask);
+        let GreenShift = FindLeastSignificantSetBit(GreenMask);
+        let BlueShift = FindLeastSignificantSetBit(BlueMask);
+        let AlphaShift = FindLeastSignificantSetBit(AlphaMask);
+
+        //Assert(RedShift.Found);
+        //Assert(GreenShift.Found);
+        //Assert(BlueShift.Found);
+        //Assert(AlphaShift.Found);
+        let mut SourceDest: *mut u32 = Pixels;
+        for Y in 0..Header.Height
+        /*  (int32 Y = 0;
+        Y < Header.Height;
+        ++Y) */
+        {
+            for X in 0..Header.Width
+            /*    (int32 X = 0;
+            X < Header.Width;
+            ++X) */
+            {
+                let C = *SourceDest;
+                *SourceDest = (((C >> AlphaShift.Index) & 0xFF) << 24)
+                    | (((C >> RedShift.Index) & 0xFF) << 16)
+                    | (((C >> GreenShift.Index) & 0xFF) << 8)
+                    | (((C >> BlueShift.Index) & 0xFF) << 0);
+                SourceDest = SourceDest.offset(1);
+            }
+        }
+    }
+
+    return result;
+}
+
 #[no_mangle]
 pub extern "C" fn game_update_and_render(
     thread: &thread_context,
     memory: &mut GameMemory,
     input: &mut GameInput,
-    mut buffer: &mut GameOffScreenBuffer,
+    buffer: &mut GameOffScreenBuffer,
 ) {
     unsafe {
         let PlayerHeight: f32 = 1.4;
@@ -216,11 +436,100 @@ pub extern "C" fn game_update_and_render(
 
         let mut game_state = &mut *(memory.permanent_storage as *mut GameState);
         if !(memory.is_initalized != 0) {
+            /*  let mut test = v2::default();
+            let mut t2 = v2 { X: 2.0, Y: 2.0 };
+            test += t2 * 0.50;
+            dbg!(test); */
+
+            game_state.Backdrop = DEBUGLoadBMP(
+                thread,
+                memory.debug_platform_read_entire_file,
+                "test/test_background.bmp",
+            );
+            let mut Bitmap = &mut game_state.HeroBitmaps[0];
+            Bitmap.Head = DEBUGLoadBMP(
+                thread,
+                memory.debug_platform_read_entire_file,
+                "test/test_hero_right_head.bmp",
+            );
+            Bitmap.Cape = DEBUGLoadBMP(
+                thread,
+                memory.debug_platform_read_entire_file,
+                "test/test_hero_right_cape.bmp",
+            );
+            Bitmap.Torso = DEBUGLoadBMP(
+                thread,
+                memory.debug_platform_read_entire_file,
+                "test/test_hero_right_torso.bmp",
+            );
+            Bitmap.AlignX = 72;
+            Bitmap.AlignY = 182;
+            Bitmap = &mut game_state.HeroBitmaps[1];
+
+            Bitmap.Head = DEBUGLoadBMP(
+                thread,
+                memory.debug_platform_read_entire_file,
+                "test/test_hero_back_head.bmp",
+            );
+            Bitmap.Cape = DEBUGLoadBMP(
+                thread,
+                memory.debug_platform_read_entire_file,
+                "test/test_hero_back_cape.bmp",
+            );
+            Bitmap.Torso = DEBUGLoadBMP(
+                thread,
+                memory.debug_platform_read_entire_file,
+                "test/test_hero_back_torso.bmp",
+            );
+            Bitmap.AlignX = 72;
+            Bitmap.AlignY = 182;
+            Bitmap = &mut game_state.HeroBitmaps[2];
+
+            Bitmap.Head = DEBUGLoadBMP(
+                thread,
+                memory.debug_platform_read_entire_file,
+                "test/test_hero_left_head.bmp",
+            );
+            Bitmap.Cape = DEBUGLoadBMP(
+                thread,
+                memory.debug_platform_read_entire_file,
+                "test/test_hero_left_cape.bmp",
+            );
+            Bitmap.Torso = DEBUGLoadBMP(
+                thread,
+                memory.debug_platform_read_entire_file,
+                "test/test_hero_left_torso.bmp",
+            );
+            Bitmap.AlignX = 72;
+            Bitmap.AlignY = 182;
+            Bitmap = &mut game_state.HeroBitmaps[3];
+
+            Bitmap.Head = DEBUGLoadBMP(
+                thread,
+                memory.debug_platform_read_entire_file,
+                "test/test_hero_front_head.bmp",
+            );
+            Bitmap.Cape = DEBUGLoadBMP(
+                thread,
+                memory.debug_platform_read_entire_file,
+                "test/test_hero_front_cape.bmp",
+            );
+            Bitmap.Torso = DEBUGLoadBMP(
+                thread,
+                memory.debug_platform_read_entire_file,
+                "test/test_hero_front_torso.bmp",
+            );
+            Bitmap.AlignX = 72;
+            Bitmap.AlignY = 182;
+            //Bitmap = &mut game_state.HeroBitmaps[4];
+
+            game_state.CameraP.AbsTileX = 17 / 2;
+            game_state.CameraP.AbsTileY = 9 / 2;
+
             game_state.PlayerP.AbsTileX = 1;
             game_state.PlayerP.AbsTileY = 3;
-            game_state.PlayerP.TileRelX = 5.0;
-            game_state.PlayerP.TileRelY = 5.0;
-
+            game_state.PlayerP.Offset.X = 5.0;
+            game_state.PlayerP.Offset.Y = 5.0;
             InitializeArena(
                 &mut game_state.WorldArena,
                 (memory.permanent_storage_size - size_of::<GameState>() as u64)
@@ -251,8 +560,8 @@ pub extern "C" fn game_update_and_render(
             TileMap.TileSideInMeters = 1.4;
 
             let mut RandomNumberIndex = 0;
-            let mut TilesPerWidth = 17;
-            let mut TilesPerHeight = 9;
+            let TilesPerWidth = 17;
+            let TilesPerHeight = 9;
             let mut ScreenX = 0;
             let mut ScreenY = 0;
             let mut AbsTileZ = 0;
@@ -273,7 +582,7 @@ pub extern "C" fn game_update_and_render(
                 // Assert(RandomNumberIndex < ArrayCount(RandomNumberTable));
 
                 let mut RandomChoice = 0;
-                if (DoorUp || DoorDown) {
+                if DoorUp || DoorDown {
                     RandomNumberIndex += 1;
                     RandomChoice = RandomNumberTable[RandomNumberIndex] % 2;
                 } else {
@@ -281,13 +590,15 @@ pub extern "C" fn game_update_and_render(
                     RandomChoice = RandomNumberTable[RandomNumberIndex] % 3;
                 }
 
-                if (RandomChoice == 2) {
-                    if (AbsTileZ == 0) {
+                let mut createdZDoor = false;
+                if RandomChoice == 2 {
+                    createdZDoor = true;
+                    if AbsTileZ == 0 {
                         DoorUp = true;
                     } else {
                         DoorDown = true;
                     }
-                } else if (RandomChoice == 1) {
+                } else if RandomChoice == 1 {
                     DoorRight = true;
                 } else {
                     DoorTop = true;
@@ -307,32 +618,32 @@ pub extern "C" fn game_update_and_render(
                         let AbsTileY = ScreenY * TilesPerHeight + TileY;
 
                         let mut TileValue = 1;
-                        if ((TileX == 0) && (!DoorLeft || (TileY != (TilesPerHeight / 2)))) {
+                        if (TileX == 0) && (!DoorLeft || (TileY != (TilesPerHeight / 2))) {
                             TileValue = 2;
                         }
 
-                        if ((TileX == (TilesPerWidth - 1))
-                            && (!DoorRight || (TileY != (TilesPerHeight / 2))))
+                        if (TileX == (TilesPerWidth - 1))
+                            && (!DoorRight || (TileY != (TilesPerHeight / 2)))
                         {
                             TileValue = 2;
                         }
 
-                        if ((TileY == 0) && (!DoorBottom || (TileX != (TilesPerWidth / 2)))) {
+                        if (TileY == 0) && (!DoorBottom || (TileX != (TilesPerWidth / 2))) {
                             TileValue = 2;
                         }
 
-                        if ((TileY == (TilesPerHeight - 1))
-                            && (!DoorTop || (TileX != (TilesPerWidth / 2))))
+                        if (TileY == (TilesPerHeight - 1))
+                            && (!DoorTop || (TileX != (TilesPerWidth / 2)))
                         {
                             TileValue = 2;
                         }
 
-                        if ((TileX == 10) && (TileY == 6)) {
-                            if (DoorUp) {
+                        if (TileX == 10) && (TileY == 6) {
+                            if DoorUp {
                                 TileValue = 3;
                             }
 
-                            if (DoorDown) {
+                            if DoorDown {
                                 TileValue = 4;
                             }
                         }
@@ -351,12 +662,9 @@ pub extern "C" fn game_update_and_render(
                 DoorLeft = DoorRight;
                 DoorBottom = DoorTop;
 
-                if (DoorUp) {
-                    DoorDown = true;
-                    DoorUp = false;
-                } else if (DoorDown) {
-                    DoorUp = true;
-                    DoorDown = false;
+                if createdZDoor {
+                    DoorDown = !DoorDown;
+                    DoorUp = !DoorUp;
                 } else {
                     DoorUp = false;
                     DoorDown = false;
@@ -365,24 +673,23 @@ pub extern "C" fn game_update_and_render(
                 DoorRight = false;
                 DoorTop = false;
 
-                if (RandomChoice == 2) {
-                    if (AbsTileZ == 0) {
+                if RandomChoice == 2 {
+                    if AbsTileZ == 0 {
                         AbsTileZ = 1;
                     } else {
                         AbsTileZ = 0;
                     }
-                } else if (RandomChoice == 1) {
+                } else if RandomChoice == 1 {
                     ScreenX += 1;
                 } else {
                     ScreenY += 1;
                 }
             }
-            dbg!("INITALIZATION SUCESS");
             memory.is_initalized = true as bool32;
         }
 
-        let mut World = game_state.world;
-        let mut TileMap = &mut *(*World).TileMap;
+        let World = game_state.world;
+        let TileMap = &mut *(*World).TileMap;
 
         let TileSideInPixels = 60;
         let MetersToPixels = TileSideInPixels as f32 / TileMap.TileSideInMeters as f32;
@@ -394,67 +701,92 @@ pub extern "C" fn game_update_and_render(
             let controller = &mut input.controllers[controller_index];
             if controller.is_analog != 0 {
             } else {
-                // NOTE(casey): Use digital movement tuning
-                let mut dPlayerX: f32 = 0.0; // pixels/second
-                let mut dPlayerY: f32 = 0.0; // pixels/second
+                let mut dPlayer = v2::default();
 
                 if controller.move_up().ended_down != 0 {
-                    dPlayerY = 1.0;
+                    game_state.HeroFacingDirection = 1;
+                    dPlayer.Y = 1.0;
                 }
                 if controller.move_down().ended_down != 0 {
-                    dPlayerY = -1.0;
+                    game_state.HeroFacingDirection = 3;
+                    dPlayer.Y = -1.0;
                 }
                 if controller.move_left().ended_down != 0 {
-                    dPlayerX = -1.0;
+                    game_state.HeroFacingDirection = 2;
+                    dPlayer.X = -1.0;
                 }
+                let mut is_moving = false;
                 if controller.move_right().ended_down != 0 {
-                    dPlayerX = 1.0;
+                    game_state.HeroFacingDirection = 0;
+                    dPlayer.X = 1.0;
+                    is_moving = true;
                 }
 
                 let mut PlayerSpeed = 2.0;
                 if controller.action_up().ended_down != 0 {
                     PlayerSpeed = 10.0;
                 }
-                dPlayerX *= PlayerSpeed;
-                dPlayerY *= PlayerSpeed;
+                dPlayer = dPlayer * PlayerSpeed; //fix *= scalar
+
+                if (dPlayer.X != 0.0) && (dPlayer.Y != 0.0) {
+                    dPlayer = 0.707106781187 * dPlayer;
+                }
 
                 // TODO(casey): Diagonal will be faster!  Fix once we have vectors :)
                 let mut NewPlayerP = game_state.PlayerP;
-                NewPlayerP.TileRelX += input.dtForFrame * dPlayerX;
-                NewPlayerP.TileRelY += input.dtForFrame * dPlayerY;
+                //NewPlayerP.Offset += dPlayer * input.dtForFrame;
+                NewPlayerP.Offset.X += dPlayer.X * input.dtForFrame;
+                NewPlayerP.Offset.Y += dPlayer.Y * input.dtForFrame;
                 NewPlayerP = RecanonicalizePosition(TileMap, NewPlayerP);
                 // TODO(casey): Delta function that auto-recanonicalizes
 
                 let mut PlayerLeft = NewPlayerP;
-                PlayerLeft.TileRelX -= 0.5 * PlayerWidth;
+                PlayerLeft.Offset.X -= 0.5 * PlayerWidth;
                 PlayerLeft = RecanonicalizePosition(TileMap, PlayerLeft);
 
                 let mut PlayerRight = NewPlayerP;
-                PlayerRight.TileRelX += 0.5 * PlayerWidth;
+                PlayerRight.Offset.X += 0.5 * PlayerWidth;
                 PlayerRight = RecanonicalizePosition(TileMap, PlayerRight);
 
                 if IsTileMapPointEmpty(TileMap, NewPlayerP)
                     && IsTileMapPointEmpty(TileMap, PlayerLeft)
                     && IsTileMapPointEmpty(TileMap, PlayerRight)
                 {
+                    if !AreOnSameTile(&game_state.PlayerP, &NewPlayerP) {
+                        let NewTileValue = GetTileValue_P(TileMap, NewPlayerP);
+
+                        if NewTileValue == 3 {
+                            NewPlayerP.AbsTileZ += 1;
+                        } else if NewTileValue == 4 {
+                            NewPlayerP.AbsTileZ -= 1;
+                        }
+                    }
                     game_state.PlayerP = NewPlayerP;
+                }
+                if is_moving {
+                    dbg!(NewPlayerP);
+                }
+
+                game_state.CameraP.AbsTileZ = game_state.PlayerP.AbsTileZ;
+
+                let Diff = Subtract(TileMap, &game_state.PlayerP, &game_state.CameraP);
+                if Diff.dXY.X > (9.0 * TileMap.TileSideInMeters) {
+                    game_state.CameraP.AbsTileX += 17;
+                }
+                if Diff.dXY.X < -(9.0 * TileMap.TileSideInMeters) {
+                    game_state.CameraP.AbsTileX -= 17;
+                }
+                if Diff.dXY.Y > (5.0 * TileMap.TileSideInMeters) {
+                    game_state.CameraP.AbsTileY += 9;
+                }
+                if Diff.dXY.Y < -(5.0 * TileMap.TileSideInMeters) {
+                    game_state.CameraP.AbsTileY -= 9;
                 }
             }
         }
         let width = buffer.width;
         let height = buffer.height;
-
-        DrawRectangle(
-            &mut buffer,
-            0.0,
-            0.0,
-            width as f32,
-            height as f32,
-            1.0,
-            0.0,
-            0.1,
-        );
-
+        DrawBitmap(buffer, &game_state.Backdrop, 0.0, 0.0, 0, 0);
         let ScreenCenterX = 0.5 * buffer.width as f32;
         let ScreenCenterY = 0.5 * buffer.height as f32;
 
@@ -468,87 +800,125 @@ pub extern "C" fn game_update_and_render(
             RelColumn < 20;
             ++RelColumn) */
             {
-                let Column = (game_state.PlayerP.AbsTileX as u32 + RelColumn as u32);
-                let Row = (game_state.PlayerP.AbsTileY as u32 + RelRow as u32);
-                let TileID = GetTileValue(TileMap, Column, Row, game_state.PlayerP.AbsTileZ);
+                let Column = game_state.CameraP.AbsTileX as u32 + RelColumn as u32;
+                let Row = game_state.CameraP.AbsTileY as u32 + RelRow as u32;
+                let TileID = GetTileValue(TileMap, Column, Row, game_state.CameraP.AbsTileZ);
 
-                if (TileID > 0) {
+                if TileID > 1 {
                     let mut Gray = 0.5;
-                    if (TileID == 2) {
+                    if TileID == 2 {
                         Gray = 1.0;
                     }
 
-                    if (TileID > 2) {
+                    if TileID > 2 {
                         Gray = 0.25;
                     }
 
-                    if ((Column == game_state.PlayerP.AbsTileX)
-                        && (Row == game_state.PlayerP.AbsTileY))
+                    if (Column == game_state.CameraP.AbsTileX)
+                        && (Row == game_state.CameraP.AbsTileY)
                     {
                         Gray = 0.0;
                     }
 
-                    let CenX = ScreenCenterX - MetersToPixels * game_state.PlayerP.TileRelX
-                        + (RelColumn as f32) * TileSideInPixels as f32;
-                    let CenY = ScreenCenterY + MetersToPixels * game_state.PlayerP.TileRelY
-                        - (RelRow as f32) * TileSideInPixels as f32;
-                    let MinX = CenX - 0.5 * TileSideInPixels as f32;
-                    let MinY = CenY - 0.5 * TileSideInPixels as f32;
-                    let MaxX = CenX + 0.5 * TileSideInPixels as f32;
-                    let MaxY = CenY + 0.5 * TileSideInPixels as f32;
-                    DrawRectangle(buffer, MinX, MinY, MaxX, MaxY, Gray, Gray, Gray);
+                    let TileSide = v2 {
+                        X: 0.5 * TileSideInPixels as f32,
+                        Y: 0.5 * TileSideInPixels as f32,
+                    };
+                    let Cen = v2 {
+                        X: ScreenCenterX - MetersToPixels * game_state.CameraP.Offset.X
+                            + (RelColumn as f32) * TileSideInPixels as f32,
+                        Y: ScreenCenterY + MetersToPixels * game_state.CameraP.Offset.Y
+                            - (RelRow as f32) * TileSideInPixels as f32,
+                    };
+                    let Min = Cen - TileSide;
+                    let Max = Cen + TileSide;
+                    /*  v2 Min = Cen - TileSide;
+                    v2 Max = Cen + TileSide; */
+                    DrawRectangle(buffer, Min, Max, Gray, Gray, Gray);
                 }
             }
         }
 
+        let Diff = Subtract(TileMap, &game_state.PlayerP, &game_state.CameraP);
+
         let PlayerR = 1.0;
         let PlayerG = 1.0;
         let PlayerB = 0.0;
-        let PlayerLeft = ScreenCenterX - 0.5 * MetersToPixels * PlayerWidth;
-        let PlayerTop = ScreenCenterY - MetersToPixels * PlayerHeight;
+        let PlayerGroundPointX = ScreenCenterX + MetersToPixels * Diff.dXY.X;
+        let PlayerGroundPointY = ScreenCenterY - MetersToPixels * Diff.dXY.Y;
+        let PlayerLeftTop = v2 {
+            X: PlayerGroundPointX - 0.5 * MetersToPixels * PlayerWidth,
+            Y: PlayerGroundPointY - MetersToPixels * PlayerHeight,
+        };
+        let PlayerWidthHeight = v2 {
+            X: PlayerWidth,
+            Y: PlayerHeight,
+        };
         DrawRectangle(
             buffer,
-            PlayerLeft,
-            PlayerTop,
-            PlayerLeft + MetersToPixels * PlayerWidth,
-            PlayerTop + MetersToPixels * PlayerHeight,
+            PlayerLeftTop,
+            PlayerLeftTop + MetersToPixels * PlayerWidthHeight,
             PlayerR,
             PlayerG,
             PlayerB,
+        );
+
+        let HeroBitmaps = &game_state.HeroBitmaps[game_state.HeroFacingDirection as usize];
+        DrawBitmap(
+            buffer,
+            &HeroBitmaps.Torso,
+            PlayerGroundPointX,
+            PlayerGroundPointY,
+            HeroBitmaps.AlignX,
+            HeroBitmaps.AlignY,
+        );
+        DrawBitmap(
+            buffer,
+            &HeroBitmaps.Cape,
+            PlayerGroundPointX,
+            PlayerGroundPointY,
+            HeroBitmaps.AlignX,
+            HeroBitmaps.AlignY,
+        );
+        DrawBitmap(
+            buffer,
+            &HeroBitmaps.Head,
+            PlayerGroundPointX,
+            PlayerGroundPointY,
+            HeroBitmaps.AlignX,
+            HeroBitmaps.AlignY,
         );
     }
 }
 
 unsafe fn DrawRectangle(
     Buffer: &mut GameOffScreenBuffer,
-    RealMinX: f32,
-    RealMinY: f32,
-    RealMaxX: f32,
-    RealMaxY: f32,
+    vMin: v2,
+    vMax: v2,
     R: f32,
     G: f32,
     B: f32,
 ) {
     // TODO(casey): Floating point color tomorrow!!!!!!
 
-    let mut MinX = (RealMinX).round() as i32;
-    let mut MinY = (RealMinY).round() as i32;
-    let mut MaxX = (RealMaxX).round() as i32;
-    let mut MaxY = (RealMaxY).round() as i32;
+    let mut MinX = (vMin.X).round() as i32;
+    let mut MinY = (vMin.Y).round() as i32;
+    let mut MaxX = (vMax.X).round() as i32;
+    let mut MaxY = (vMax.Y).round() as i32;
 
-    if (MinX < 0) {
+    if MinX < 0 {
         MinX = 0;
     }
 
-    if (MinY < 0) {
+    if MinY < 0 {
         MinY = 0;
     }
 
-    if (MaxX > Buffer.width) {
+    if MaxX > Buffer.width {
         MaxX = Buffer.width;
     }
 
-    if (MaxY > Buffer.height) {
+    if MaxY > Buffer.height {
         MaxY = Buffer.height;
     }
 

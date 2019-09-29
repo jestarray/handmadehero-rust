@@ -12,6 +12,18 @@ use std::{
     ptr::null_mut,
     str::from_utf8,
 };
+use winapi::um::minwinbase::GetFileExInfoStandard;
+use winapi::um::winuser::GetMonitorInfoA;
+use winapi::um::winuser::GetWindowLongA;
+use winapi::um::winuser::GetWindowPlacement;
+use winapi::um::winuser::MonitorFromWindow;
+use winapi::um::winuser::SetCursor;
+use winapi::um::winuser::SetWindowLongA;
+use winapi::um::winuser::SetWindowPlacement;
+use winapi::um::winuser::GWL_STYLE;
+use winapi::um::winuser::HWND_TOP;
+use winapi::um::winuser::MONITOR_DEFAULTTOPRIMARY;
+use winapi::um::winuser::WM_SETCURSOR;
 use winapi::{
     ctypes::c_void,
     shared::{
@@ -35,6 +47,7 @@ use winapi::{
     },
 };
 
+use winapi::um::winuser::SetWindowPos;
 use winapi::um::{
     handleapi::{CloseHandle, INVALID_HANDLE_VALUE},
     libloaderapi::{
@@ -43,6 +56,16 @@ use winapi::um::{
     memoryapi::{MapViewOfFile, VirtualAlloc, VirtualFree, FILE_MAP_ALL_ACCESS},
 };
 
+use winapi::um::fileapi::WIN32_FILE_ATTRIBUTE_DATA;
+use winapi::um::winuser::LoadCursorW;
+use winapi::um::winuser::IDC_ARROW;
+use winapi::um::winuser::MONITORINFO;
+use winapi::um::winuser::SWP_FRAMECHANGED;
+use winapi::um::winuser::SWP_NOMOVE;
+use winapi::um::winuser::SWP_NOOWNERZORDER;
+use winapi::um::winuser::SWP_NOSIZE;
+use winapi::um::winuser::SWP_NOZORDER;
+use winapi::um::winuser::WINDOWPLACEMENT;
 use winapi::um::{
     minwinbase::WIN32_FIND_DATAA,
     mmsystem::TIMERR_NOERROR,
@@ -53,7 +76,6 @@ use winapi::um::{
     winbase::{CopyFileA, CreateFileMappingA},
     wingdi::GetDeviceCaps,
 };
-
 use winapi::um::{
     wingdi::VREFRESH,
     winnt::{
@@ -65,7 +87,6 @@ use winapi::um::{
         PM_REMOVE, VK_LBUTTON, VK_MBUTTON, VK_RBUTTON, VK_XBUTTON1, VK_XBUTTON2, WM_QUIT,
     },
 };
-
 use winapi::{
     shared::{
         minwindef::{HINSTANCE, LPARAM, LRESULT, UINT, WPARAM},
@@ -128,6 +149,21 @@ static mut GLOBAL_BACKBUFFER: Win32OffScreenBuffer = Win32OffScreenBuffer {
 };
 static mut GLOBAL_SECONDARY_BUFFER: LPDIRECTSOUNDBUFFER = null_mut();
 static mut PERF_COUNT_FREQUENCY: i64 = 0;
+
+static mut DEBUGGlobalShowCursor: bool = false;
+static mut GlobalWindowPosition: WINDOWPLACEMENT = WINDOWPLACEMENT {
+    length: 0,
+    flags: 0,
+    showCmd: 0,
+    ptMinPosition: POINT { x: 0, y: 0 },
+    ptMaxPosition: POINT { x: 0, y: 0 },
+    rcNormalPosition: RECT {
+        left: 0,
+        top: 0,
+        right: 0,
+        bottom: 0,
+    },
+};
 
 pub unsafe fn debug_platform_read_entire_file(
     thread: &thread_context,
@@ -519,9 +555,16 @@ unsafe fn win32_get_last_write_time(file_name: &str) -> FILETIME {
     return last_write_time;
 }
 
-unsafe fn win32_load_game_code(source_dll_name: &str, tmp_dll_name: &str) -> Win32GameCode {
+unsafe fn win32_load_game_code(
+    source_dll_name: &str,
+    tmp_dll_name: &str,
+    LockFileName: &str,
+) -> Win32GameCode {
     let source_name = cstring!(source_dll_name);
     let temp_name = cstring!(tmp_dll_name);
+    let lock_name = cstring!(LockFileName);
+    let mut Ignored = zeroed::<WIN32_FILE_ATTRIBUTE_DATA>();
+
     let mut result = Win32GameCode {
         game_code_dll: 0 as HMODULE,
         update_and_render: game_update_and_render,
@@ -529,36 +572,43 @@ unsafe fn win32_load_game_code(source_dll_name: &str, tmp_dll_name: &str) -> Win
         is_valid: false,
         dll_last_write_time: win32_get_last_write_time(source_dll_name),
     };
-    if CopyFileA(source_name.as_ptr(), temp_name.as_ptr(), FALSE) != 0 {
-        println!("FILE COPY SUCESS");
-    } else {
-        /* use winapi::um::errhandlingapi::GetLastError;
-        let x = GetLastError();
-        dbg!(x); */
-        println!("FILE COPY FAIL");
-    }
+    if !(GetFileAttributesExA(
+        lock_name.as_ptr(),
+        GetFileExInfoStandard,
+        &mut Ignored as *mut WIN32_FILE_ATTRIBUTE_DATA as *mut c_void,
+    ) != 0)
+    {
+        if CopyFileA(source_name.as_ptr(), temp_name.as_ptr(), FALSE) != 0 {
+            println!("FILE COPY SUCESS");
+        } else {
+            /* use winapi::um::errhandlingapi::GetLastError;
+            let x = GetLastError();
+            dbg!(x); */
+            println!("FILE COPY FAIL");
+        }
 
-    result.game_code_dll = LoadLibraryA(temp_name.as_ptr());
+        result.game_code_dll = LoadLibraryA(temp_name.as_ptr());
 
-    if result.game_code_dll != null_mut() {
-        let game_update_and_render = cstring!("game_update_and_render");
-        let update = transmute(GetProcAddress(
-            result.game_code_dll,
-            game_update_and_render.as_ptr(),
-        ));
+        if result.game_code_dll != null_mut() {
+            let game_update_and_render = cstring!("game_update_and_render");
+            let update = transmute(GetProcAddress(
+                result.game_code_dll,
+                game_update_and_render.as_ptr(),
+            ));
 
-        let game_get_sound_samples = cstring!("GameGetSoundSamples");
+            let game_get_sound_samples = cstring!("GameGetSoundSamples");
 
-        let get_sound_samples = transmute(GetProcAddress(
-            result.game_code_dll,
-            game_get_sound_samples.as_ptr(),
-        ));
-        result.update_and_render = update;
-        result.get_sound_samples = get_sound_samples;
-        println!("LOADED DLL SUCESSFULLY");
-        result.is_valid = true;
-    } else {
-        println!("FAILED TO LOAD GAMECODE");
+            let get_sound_samples = transmute(GetProcAddress(
+                result.game_code_dll,
+                game_get_sound_samples.as_ptr(),
+            ));
+            result.update_and_render = update;
+            result.get_sound_samples = get_sound_samples;
+            println!("LOADED DLL SUCESSFULLY");
+            result.is_valid = true;
+        } else {
+            println!("FAILED TO LOAD GAMECODE");
+        }
     }
     result
 }
@@ -784,16 +834,32 @@ fn win32_resize_dibsection(buffer: &mut Win32OffScreenBuffer, width: i32, height
     };
 }
 
-fn win32_update_window(
+unsafe fn win32_display_buffer_in_window(
     device_context: HDC,
     window_width: i32,
     window_height: i32,
     buffer: &Win32OffScreenBuffer,
 ) {
-    let OffsetX = 10;
-    let OffsetY = 10;
+    if (window_width >= buffer.width * 2) && (window_height >= buffer.height * 2) {
+        StretchDIBits(
+            device_context,
+            0,
+            0,
+            2 * buffer.width,
+            2 * buffer.height,
+            0,
+            0,
+            buffer.width,
+            buffer.height,
+            buffer.memory,
+            &buffer.info,
+            DIB_RGB_COLORS,
+            SRCCOPY,
+        );
+    } else {
+        let OffsetX = 10;
+        let OffsetY = 10;
 
-    unsafe {
         PatBlt(device_context, 0, 0, window_width, OffsetY, BLACKNESS);
         PatBlt(
             device_context,
@@ -968,6 +1034,45 @@ unsafe fn Win32PlayBackInput(State: &mut win32_state, NewInput: &mut GameInput) 
     }
 }
 
+unsafe fn ToggleFullscreen(Window: HWND) {
+    // NOTE(casey): This follows Raymond Chen's prescription
+    // for fullscreen toggling, see:
+    // http://blogs.msdn.com/b/oldnewthing/archive/2010/04/12/9994016.aspx
+    let Style = GetWindowLongA(Window, GWL_STYLE);
+    if (Style & WS_OVERLAPPEDWINDOW as i32) != 0 {
+        let mut MonitorInfo = zeroed::<MONITORINFO>();
+        if GetWindowPlacement(Window, &mut GlobalWindowPosition) != 0
+            && GetMonitorInfoA(
+                MonitorFromWindow(Window, MONITOR_DEFAULTTOPRIMARY),
+                &mut MonitorInfo,
+            ) != 0
+        {
+            SetWindowLongA(Window, GWL_STYLE, Style & !(WS_OVERLAPPEDWINDOW as i32));
+            SetWindowPos(
+                Window,
+                HWND_TOP,
+                MonitorInfo.rcMonitor.left,
+                MonitorInfo.rcMonitor.top,
+                MonitorInfo.rcMonitor.right - MonitorInfo.rcMonitor.left,
+                MonitorInfo.rcMonitor.bottom - MonitorInfo.rcMonitor.top,
+                SWP_NOOWNERZORDER | SWP_FRAMECHANGED,
+            );
+        }
+    } else {
+        SetWindowLongA(Window, GWL_STYLE, Style | WS_OVERLAPPEDWINDOW as i32);
+        SetWindowPlacement(Window, &GlobalWindowPosition);
+        SetWindowPos(
+            Window,
+            0 as *mut winapi::shared::windef::HWND__,
+            0,
+            0,
+            0,
+            0,
+            SWP_NOMOVE | SWP_NOSIZE | SWP_NOZORDER | SWP_NOOWNERZORDER | SWP_FRAMECHANGED,
+        );
+    }
+}
+
 unsafe fn win32_process_pending_messages(
     State: &mut win32_state,
     keyboard_controller: &mut GameControllerInput,
@@ -1091,6 +1196,13 @@ unsafe fn win32_process_pending_messages(
                                 RUNNING = false;
                             }
                         }
+                        /*  VK_RETURN => {
+                            if alt_is_down {
+                                if message.hwnd != null_mut() {
+                                    ToggleFullscreen(message.hwnd);
+                                }
+                            }
+                        } */
                         _ => {}
                     }
                 };
@@ -1109,10 +1221,20 @@ unsafe extern "system" fn win32_main_window_callback(
     wparam: WPARAM,
     lparam: LPARAM,
 ) -> LRESULT {
+    let mut result = 0;
     match message {
         WM_SIZE => 0,
         WM_CLOSE => {
             RUNNING = false;
+            0
+        }
+        WM_SETCURSOR => {
+            if DEBUGGlobalShowCursor {
+                result = DefWindowProcW(window, message, wparam, lparam);
+            } else {
+                SetCursor(0 as *mut winapi::shared::windef::HICON__);
+            }
+
             0
         }
         WM_ACTIVATEAPP => {
@@ -1133,7 +1255,7 @@ unsafe extern "system" fn win32_main_window_callback(
             let device_context = BeginPaint(window, &mut paint);
             let dimension = win32_get_window_dimension(window);
 
-            win32_update_window(
+            win32_display_buffer_in_window(
                 device_context,
                 dimension.width,
                 dimension.height,
@@ -1239,7 +1361,6 @@ pub unsafe extern "system" fn winmain() {
             _ => {}
         }
     }
-    //win32getexefilename end
 
     let mut State = win32_state {
         GameMemoryBlock: null_mut(),
@@ -1275,6 +1396,8 @@ pub unsafe extern "system" fn winmain() {
     let tp = &[one_past_last_slash, b"handmade_temp.dll"].concat();
     let temp_game_code_dll_full_path = from_utf8(tp).unwrap();
 
+    let GameCodeLockFullPath = &[one_past_last_slash, b"lock.tmp"].concat();
+
     let mut perfcounter_frequency_result = zeroed::<LARGE_INTEGER>();
     QueryPerformanceFrequency(&mut perfcounter_frequency_result);
     PERF_COUNT_FREQUENCY = *perfcounter_frequency_result.QuadPart();
@@ -1282,9 +1405,15 @@ pub unsafe extern "system" fn winmain() {
     let desired_scheduler_ms = 1;
     let sleep_is_granular = timeBeginPeriod(desired_scheduler_ms) == TIMERR_NOERROR;
     win32_load_xinput();
+
+    #[cfg(feature = "handmade_internal")]
+    {
+        DEBUGGlobalShowCursor = true;
+    }
+
     let name = win32_string("HandmadeheroWindowClass");
     let title = win32_string("HandmadeHero");
-    let instance = unsafe { GetModuleHandleW(name.as_ptr() as *const u16) as HINSTANCE };
+    let instance = GetModuleHandleW(name.as_ptr() as *const u16) as HINSTANCE;
 
     let wnd_class = WNDCLASSW {
         style: CS_HREDRAW | CS_VREDRAW,
@@ -1294,7 +1423,7 @@ pub unsafe extern "system" fn winmain() {
         cbClsExtra: 0,
         cbWndExtra: 0,
         hIcon: null_mut(),
-        hCursor: null_mut(),
+        hCursor: LoadCursorW(0 as HINSTANCE, IDC_ARROW),
         hbrBackground: null_mut(),
         lpszMenuName: null_mut(),
     };
@@ -1493,9 +1622,12 @@ pub unsafe extern "system" fn winmain() {
                     let AudioLatencySeconds: f32 = 0.0;
                     let mut SoundIsValid = false;
 
+                    let gamecodelockpath = from_utf8(&GameCodeLockFullPath).unwrap();
+
                     let mut game = win32_load_game_code(
                         source_game_code_dll_file_name_full_path,
                         temp_game_code_dll_full_path,
+                        gamecodelockpath,
                     );
                     let mut last_cycle_count = _rdtsc();
                     while RUNNING {
@@ -1509,6 +1641,7 @@ pub unsafe extern "system" fn winmain() {
                             game = win32_load_game_code(
                                 source_game_code_dll_file_name_full_path,
                                 temp_game_code_dll_full_path,
+                                gamecodelockpath,
                             );
                         }
 
@@ -1910,7 +2043,7 @@ pub unsafe extern "system" fn winmain() {
                                 );
                             } */
                             let device_context = GetDC(window);
-                            win32_update_window(
+                            win32_display_buffer_in_window(
                                 device_context,
                                 dimension.width,
                                 dimension.height,
