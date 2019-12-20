@@ -15,6 +15,7 @@ HanmadeHero is a game made from scratch as much as reasonably possible*. I'm try
 * make vulkan version to learn?
 * handmade.exe currently copies the handmade.dll functions entirely, opposed to having lightweight stub functions 
 * put skipped assert assert tests
+* turn overflow safety checks back on
 
 # translation notes:
 * handmade.rs = handmade.h(contains interface, structs etc both used by the platform layer and the game) & handmade.cpp

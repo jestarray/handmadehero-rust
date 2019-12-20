@@ -28,7 +28,7 @@ use std::{convert::TryInto, ffi::c_void, ptr::null_mut};
 mod handmade_random;
 use crate::handmade_random::RandomNumberTable;
 mod handmade_math;
-use crate::handmade_math::v2;
+use crate::handmade_math::*;
 struct loaded_bitmap {
     Width: i32,
     Height: i32,
@@ -170,7 +170,7 @@ pub struct GameState {
     world: *mut world,
     PlayerP: tile_map_position,
     CameraP: tile_map_position,
-
+    dPlayerP: v2,
     Backdrop: loaded_bitmap,
     HeroFacingDirection: u32,
     HeroBitmaps: [hero_bitmaps; 4],
@@ -183,7 +183,7 @@ impl Default for GameState {
             world: 0 as *mut world,
             PlayerP: tile_map_position::default(),
             CameraP: tile_map_position::default(),
-
+            dPlayerP: v2::default(),
             Backdrop: loaded_bitmap::default(),
             HeroFacingDirection: 0,
             HeroBitmaps: [
@@ -699,40 +699,41 @@ pub extern "C" fn game_update_and_render(
             let controller = &mut input.controllers[controller_index];
             if controller.is_analog != 0 {
             } else {
-                let mut dPlayer = v2::default();
+                let mut ddPlayer = v2::default();
 
                 if controller.move_up().ended_down != 0 {
                     game_state.HeroFacingDirection = 1;
-                    dPlayer.Y = 1.0;
+                    ddPlayer.Y = 1.0;
                 }
                 if controller.move_down().ended_down != 0 {
                     game_state.HeroFacingDirection = 3;
-                    dPlayer.Y = -1.0;
+                    ddPlayer.Y = -1.0;
                 }
                 if controller.move_left().ended_down != 0 {
                     game_state.HeroFacingDirection = 2;
-                    dPlayer.X = -1.0;
+                    ddPlayer.X = -1.0;
                 }
                 if controller.move_right().ended_down != 0 {
                     game_state.HeroFacingDirection = 0;
-                    dPlayer.X = 1.0;
+                    ddPlayer.X = 1.0;
                 }
-
-                let mut PlayerSpeed = 2.0;
+                if (ddPlayer.X != 0.0) && (ddPlayer.Y != 0.0) {
+                    ddPlayer = 0.707106781187 * ddPlayer;
+                }
+                let mut PlayerSpeed = 10.0;
                 if controller.action_up().ended_down != 0 {
-                    PlayerSpeed = 10.0;
+                    PlayerSpeed = 50.0;
                 }
-                dPlayer = dPlayer * PlayerSpeed; //fix *= scalar
+                ddPlayer = ddPlayer * PlayerSpeed;
 
-                if (dPlayer.X != 0.0) && (dPlayer.Y != 0.0) {
-                    dPlayer = 0.707106781187 * dPlayer;
-                }
+                ddPlayer += -1.5 * game_state.dPlayerP;
 
-                // TODO(casey): Diagonal will be faster!  Fix once we have vectors :)
                 let mut NewPlayerP = game_state.PlayerP;
-                //NewPlayerP.Offset += dPlayer * input.dtForFrame;
-                NewPlayerP.Offset.X += dPlayer.X * input.dtForFrame;
-                NewPlayerP.Offset.Y += dPlayer.Y * input.dtForFrame;
+                NewPlayerP.Offset = 0.5 * ddPlayer * Square(input.dtForFrame)
+                    + game_state.dPlayerP * input.dtForFrame
+                    + NewPlayerP.Offset;
+                game_state.dPlayerP = ddPlayer * input.dtForFrame + game_state.dPlayerP;
+
                 NewPlayerP = RecanonicalizePosition(TileMap, NewPlayerP);
                 // TODO(casey): Delta function that auto-recanonicalizes
 

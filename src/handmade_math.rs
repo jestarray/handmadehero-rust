@@ -88,3 +88,7 @@ impl Mul<v2> for f32 {
         result
     }
 }
+
+pub fn Square(x: f32) -> f32 {
+    x * x
+}

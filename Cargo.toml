@@ -1,7 +1,7 @@
 [package]
 name = "handmadehero-rust"
 version = "0.1.0"
-authors = ["a"]
+authors = ["jest"]
 edition = "2018"
 
 # See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
@@ -27,5 +27,5 @@ path = "src/win32_handmade.rs"
 
 [profile.dev]
 # optimize dev builds needed to match hh performance ,  uncomment for visual studio debugger to work better
-# opt-level = 3
+opt-level = 3
 overflow-checks = false 
