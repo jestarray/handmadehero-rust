@@ -5,8 +5,8 @@ HanmadeHero is a game made from scratch as much as reasonably possible*. I'm try
 
 ## For future gamedev reference:
 
-e18: 1:13:00 debunks why you shouldn't add previous frame time to compensate for missed frame
-ep38 1:29:00 linear alpha blend, one of the most important math equations in game
+* e18: 1:13:00 debunks why you shouldn't add previous frame time to compensate for missed frame
+* ep38 1:29:00 linear alpha blend, one of the most important math equations in game
 ## todo:
 
 * follow rust naming conventions
@@ -25,4 +25,8 @@ ep38 1:29:00 linear alpha blend, one of the most important math equations in gam
 
 # bugs:
 * replay is not playing back from recorded game state
-* fullscreen does not work, see line 1047
+* fullscreen does not work, see line 1047 in platform layer
+
+# disclaimer!
+
+I DO NOT want people cloning this repo and not buy the game, it is not my intention to sabatoge Handmade Hero, therefore art assets will not be provided though I will try to find some dummy replacements. This repo is up so I can bug rust people for help when the borrow checker kicks my ass.
