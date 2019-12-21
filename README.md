@@ -7,6 +7,7 @@ HanmadeHero is a game made from scratch as much as reasonably possible*. I'm try
 
 * e18: 1:13:00 debunks why you shouldn't add previous frame time to compensate for missed frame
 * ep38 1:29:00 linear alpha blend, one of the most important math equations in game
+* ep42-44: why linear algebra is very useful and makes programming math more simpler
 ## todo:
 
 * follow rust naming conventions
