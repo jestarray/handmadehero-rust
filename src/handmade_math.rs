@@ -92,3 +92,8 @@ impl Mul<v2> for f32 {
 pub fn Square(x: f32) -> f32 {
     x * x
 }
+
+pub fn Inner(a: v2, b: v2) -> f32 {
+    let result = a.X * b.X + a.Y * b.Y;
+    return result;
+}

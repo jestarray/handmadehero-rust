@@ -745,10 +745,40 @@ pub extern "C" fn game_update_and_render(
                 PlayerRight.Offset.X += 0.5 * PlayerWidth;
                 PlayerRight = RecanonicalizePosition(TileMap, PlayerRight);
 
-                if IsTileMapPointEmpty(TileMap, NewPlayerP)
-                    && IsTileMapPointEmpty(TileMap, PlayerLeft)
-                    && IsTileMapPointEmpty(TileMap, PlayerRight)
-                {
+                let mut Collided: bool = false;
+                let mut ColP = tile_map_position::default();
+
+                if !IsTileMapPointEmpty(TileMap, NewPlayerP) {
+                    ColP = NewPlayerP;
+                    Collided = true;
+                }
+                if !IsTileMapPointEmpty(TileMap, PlayerLeft) {
+                    ColP = PlayerLeft;
+                    Collided = true;
+                }
+                if !IsTileMapPointEmpty(TileMap, PlayerRight) {
+                    ColP = PlayerRight;
+                    Collided = true;
+                }
+                if Collided {
+                    let mut r = v2 { X: 0.0, Y: 0.0 };
+
+                    if ColP.AbsTileX < game_state.PlayerP.AbsTileX {
+                        r = v2 { X: 1.0, Y: 0.0 }
+                    }
+                    if ColP.AbsTileX > game_state.PlayerP.AbsTileX {
+                        r = v2 { X: -1.0, Y: 0.0 }
+                    }
+                    if ColP.AbsTileY < game_state.PlayerP.AbsTileY {
+                        r = v2 { X: 0.0, Y: -1.0 }
+                    }
+                    if ColP.AbsTileY > game_state.PlayerP.AbsTileY {
+                        r = v2 { X: 0.0, Y: -1.0 }
+                    }
+
+                    game_state.dPlayerP =
+                        game_state.dPlayerP - 1.0 * Inner(game_state.dPlayerP, r) * r;
+                } else {
                     if !AreOnSameTile(&game_state.PlayerP, &NewPlayerP) {
                         let NewTileValue = GetTileValue_P(TileMap, NewPlayerP);
 
