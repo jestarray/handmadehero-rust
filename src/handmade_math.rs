@@ -50,19 +50,8 @@ impl Neg for v2 {
     }
 }
 
-impl Mul for v2 {
-    type Output = Self;
-    fn mul(self, B: Self) -> Self {
-        let result = Self {
-            X: self.X * B.X,
-            Y: self.Y * B.Y,
-        };
-        result
-    }
-}
-
-impl MulAssign for v2 {
-    fn mul_assign(&mut self, B: Self) {
+impl MulAssign<f32> for v2 {
+    fn mul_assign(&mut self, B: f32) {
         *self = *self * B;
     }
 }
@@ -80,7 +69,7 @@ impl Mul<f32> for v2 {
 
 impl Mul<v2> for f32 {
     type Output = v2;
-    fn mul(self, B: v2) -> v2 {
+    fn mul(self: f32, B: v2) -> v2 {
         let result = v2 {
             X: self * B.X,
             Y: self * B.Y,

@@ -718,7 +718,7 @@ pub extern "C" fn game_update_and_render(
                     ddPlayer.X = 1.0;
                 }
                 if (ddPlayer.X != 0.0) && (ddPlayer.Y != 0.0) {
-                    ddPlayer = 0.707106781187 * ddPlayer;
+                    ddPlayer *= 0.707106781187;
                 }
                 let mut PlayerSpeed = 10.0;
                 if controller.action_up().ended_down != 0 {
