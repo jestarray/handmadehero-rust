@@ -88,14 +88,13 @@ pub unsafe fn RecanonicalizePosition(
 
 //inline tile_chunk *
 pub unsafe fn GetTileChunk(
-    TileMap: *mut tile_map,
+    TileMap: &tile_map,
     TileChunkX: u32,
     TileChunkY: u32,
     TileChunkZ: u32,
 ) -> *mut tile_chunk {
     //let mut TileChunk= 0 as *mut tile_chunk;
     let mut TileChunk = (*TileMap).TileChunks;
-    let TileMap = &mut *TileMap;
     if (TileChunkX >= 0)
         && (TileChunkX < TileMap.TileChunkCountX)
         && (TileChunkY >= 0)
@@ -121,7 +120,7 @@ pub unsafe fn GetTileChunk(
 }
 
 pub unsafe fn GetTileValueUnchecked(
-    TileMap: *mut tile_map,
+    TileMap: &tile_map,
     TileChunk: *mut tile_chunk,
     TileX: u32,
     TileY: u32,
@@ -130,7 +129,6 @@ pub unsafe fn GetTileValueUnchecked(
     Assert(TileX < TileMap.ChunkDim);
     Assert(TileY < TileMap.ChunkDim);
      */
-    let TileMap = &mut *TileMap;
     let TileChunkValue = *(*TileChunk)
         .Tiles
         .offset((TileY * TileMap.ChunkDim + TileX).try_into().unwrap());
@@ -157,7 +155,7 @@ pub fn SetTileValueUnchecked(
 }
 
 pub unsafe fn GetTileValue_(
-    TileMap: *mut tile_map,
+    TileMap: &tile_map,
     TileChunk: *mut tile_chunk,
     TestTileX: u32,
     TestTileY: u32,
@@ -185,13 +183,12 @@ pub unsafe fn SetTileValue_(
 }
 
 pub unsafe fn GetChunkPositionFor(
-    TileMap: *mut tile_map,
+    TileMap: &tile_map,
     AbsTileX: u32,
     AbsTileY: u32,
     AbsTileZ: u32,
 ) -> tile_chunk_position {
     let mut result = tile_chunk_position::default();
-    let TileMap = &mut *TileMap;
     result.TileChunkX = AbsTileX >> TileMap.ChunkShift;
     result.TileChunkY = AbsTileY >> TileMap.ChunkShift;
     result.TileChunkZ = AbsTileZ;
@@ -201,12 +198,7 @@ pub unsafe fn GetChunkPositionFor(
     return result;
 }
 
-pub unsafe fn GetTileValue(
-    TileMap: *mut tile_map,
-    AbsTileX: u32,
-    AbsTileY: u32,
-    AbsTileZ: u32,
-) -> u32 {
+pub unsafe fn GetTileValue(TileMap: &tile_map, AbsTileX: u32, AbsTileY: u32, AbsTileZ: u32) -> u32 {
     let ChunkPos = GetChunkPositionFor(TileMap, AbsTileX, AbsTileY, AbsTileZ);
     let TileChunk = GetTileChunk(
         TileMap,
@@ -218,13 +210,13 @@ pub unsafe fn GetTileValue(
 
     return TileChunkValue;
 }
-pub unsafe fn GetTileValue_P(TileMap: *mut tile_map, Pos: tile_map_position) -> u32 {
+pub unsafe fn GetTileValue_P(TileMap: &tile_map, Pos: tile_map_position) -> u32 {
     let TileChunkValue = GetTileValue(TileMap, Pos.AbsTileX, Pos.AbsTileY, Pos.AbsTileZ);
 
     return TileChunkValue;
 }
 
-pub unsafe fn IsTileMapPointEmpty(TileMap: *mut tile_map, CanPos: tile_map_position) -> bool {
+pub unsafe fn IsTileMapPointEmpty(TileMap: &tile_map, CanPos: tile_map_position) -> bool {
     let TileChunkValue = GetTileValue(TileMap, CanPos.AbsTileX, CanPos.AbsTileY, CanPos.AbsTileZ);
     let Empty = (TileChunkValue == 1) || (TileChunkValue == 3) || (TileChunkValue == 4);
 
@@ -234,7 +226,7 @@ pub unsafe fn IsTileMapPointEmpty(TileMap: *mut tile_map, CanPos: tile_map_posit
 // function overloading
 pub unsafe fn SetTileValue(
     Arena: *mut memory_arena,
-    TileMap: *mut tile_map,
+    TileMap: &mut tile_map,
     AbsTileX: u32,
     AbsTileY: u32,
     AbsTileZ: u32,

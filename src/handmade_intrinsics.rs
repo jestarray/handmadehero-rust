@@ -1,4 +1,5 @@
 #![allow(non_snake_case)]
+#![allow(dead_code)]
 use crate::bool32;
 use std::convert::TryInto;
 pub fn RoundReal32ToInt32(Real32: f32) -> i32 {

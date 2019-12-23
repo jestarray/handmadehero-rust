@@ -137,16 +137,9 @@ pub struct GameButtonState {
     pub half_transition_count: i32,
     pub ended_down: i32,
 }
-struct world {
-    TileMap: *mut tile_map,
-}
-
-impl Default for world {
-    fn default() -> Self {
-        world {
-            TileMap: 0 as *mut tile_map,
-        }
-    }
+#[derive(Default)]
+struct world<'a> {
+    TileMap: Option<&'a mut tile_map>,
 }
 
 #[derive(Debug)]
@@ -165,9 +158,10 @@ impl Default for memory_arena {
         }
     }
 }
-pub struct GameState {
+#[derive(Default)]
+pub struct GameState<'a, 'b> {
     WorldArena: memory_arena,
-    world: *mut world,
+    world: Option<&'a mut world<'b>>,
     PlayerP: tile_map_position,
     CameraP: tile_map_position,
     dPlayerP: v2,
@@ -176,11 +170,11 @@ pub struct GameState {
     HeroBitmaps: [hero_bitmaps; 4],
 }
 
-impl Default for GameState {
+/* impl Default for GameState<'_, 'b> {
     fn default() -> Self {
         GameState {
             WorldArena: memory_arena::default(),
-            world: 0 as *mut world,
+            world: None,
             PlayerP: tile_map_position::default(),
             CameraP: tile_map_position::default(),
             dPlayerP: v2::default(),
@@ -194,7 +188,7 @@ impl Default for GameState {
             ],
         }
     }
-}
+} */
 
 fn InitializeArena(Arena: &mut memory_arena, Size: memory_index, Base: *mut u8) {
     Arena.Size = Size;
@@ -206,11 +200,11 @@ fn InitializeArena(Arena: &mut memory_arena, Size: memory_index, Base: *mut u8) 
 #define PushArray(Arena, Count, type) (type *)PushSize_(Arena, (Count)*sizeof(type)) */
 
 // can remove Size and be called with PushStruct::<TileMap>(&memory_arena)
-unsafe fn PushStruct<T>(arena: &mut memory_arena) -> *mut T {
-    PushSize_(arena, size_of::<T>()) as *mut T
+unsafe fn PushStruct<T>(arena: &mut memory_arena) -> &mut T {
+    &mut *(PushSize_(arena, size_of::<T>()) as *mut T)
 }
-unsafe fn PushArray<T>(arena: &mut memory_arena, count: u32) -> *mut T {
-    PushSize_(arena, count as usize * size_of::<T>()) as *mut T
+unsafe fn PushArray<T>(arena: &mut memory_arena, count: u32) -> &mut T {
+    &mut *(PushSize_(arena, count as usize * size_of::<T>()) as *mut T)
 }
 unsafe fn PushSize_(Arena: &mut memory_arena, Size: memory_index) -> *mut u8 {
     //Assert((Arena->Used + Size) <= Arena->Size);
@@ -241,6 +235,7 @@ pub struct DebugReadFile {
     pub content_size: u32,
     pub contents: *mut c_void,
 }
+#[allow(unused)]
 #[repr(packed)]
 struct bitmap_header {
     FileType: u16,
@@ -433,13 +428,13 @@ pub extern "C" fn game_update_and_render(
         let PlayerHeight: f32 = 1.4;
         let PlayerWidth: f32 = 0.75 * PlayerHeight;
 
-        let mut game_state = &mut *(memory.permanent_storage as *mut GameState);
         if !(memory.is_initalized != 0) {
             /*  let mut test = v2::default();
             let mut t2 = v2 { X: 2.0, Y: 2.0 };
             test += t2 * 0.50;
             dbg!(test); */
 
+            let mut game_state = &mut *(memory.permanent_storage as *mut GameState);
             game_state.Backdrop = DEBUGLoadBMP(
                 thread,
                 memory.debug_platform_read_entire_file,
@@ -528,34 +523,43 @@ pub extern "C" fn game_update_and_render(
             game_state.PlayerP.AbsTileY = 3;
             game_state.PlayerP.Offset.X = 5.0;
             game_state.PlayerP.Offset.Y = 5.0;
-            InitializeArena(
-                &mut game_state.WorldArena,
-                (memory.permanent_storage_size - size_of::<GameState>() as u64)
-                    .try_into()
-                    .unwrap(),
-                (memory.permanent_storage as *mut u8)
-                    .offset(size_of::<GameState>().try_into().unwrap()),
-            );
+            {
+                let mut game_state = &mut *(memory.permanent_storage as *mut GameState);
+                let world_arena = &mut game_state.WorldArena;
+                InitializeArena(
+                    world_arena,
+                    (memory.permanent_storage_size - size_of::<GameState>() as u64)
+                        .try_into()
+                        .unwrap(),
+                    (memory.permanent_storage as *mut u8)
+                        .offset(size_of::<GameState>().try_into().unwrap()),
+                );
+                game_state.world = Some(PushStruct::<world>(world_arena));
+            }
+            {
+                let World = game_state.world.as_mut().unwrap();
+                let world_arena = &mut game_state.WorldArena;
+                World.TileMap = Some(PushStruct::<tile_map>(world_arena)); //REFERENCES CAN BE __MOVED__, THEY ARE NOT COPIED, SO WORLD.TILEMAP IS NOW THE NEW SCOPE OF THE ENTIRE REFERENCE LIFE TIME.
+                let mut TileMap = World.TileMap.as_mut().unwrap();
+                TileMap.ChunkShift = 4;
+                TileMap.ChunkMask = (1 << TileMap.ChunkShift) - 1;
+                TileMap.ChunkDim = 1 << TileMap.ChunkShift;
 
-            game_state.world = PushStruct::<world>(&mut game_state.WorldArena);
-            let World = &mut *game_state.world;
-            World.TileMap = PushStruct::<tile_map>(&mut game_state.WorldArena);
+                TileMap.TileChunkCountX = 128;
+                TileMap.TileChunkCountY = 128;
+                TileMap.TileChunkCountZ = 2;
+                TileMap.TileSideInMeters = 1.4;
 
-            let mut TileMap = &mut *World.TileMap;
-
-            TileMap.ChunkShift = 4;
-            TileMap.ChunkMask = (1 << TileMap.ChunkShift) - 1;
-            TileMap.ChunkDim = 1 << TileMap.ChunkShift;
-
-            TileMap.TileChunkCountX = 128;
-            TileMap.TileChunkCountY = 128;
-            TileMap.TileChunkCountZ = 2;
-            TileMap.TileChunks = &mut *PushArray::<tile_chunk>(
-                &mut game_state.WorldArena,
-                TileMap.TileChunkCountX * TileMap.TileChunkCountY * TileMap.TileChunkCountZ,
-            );
-
-            TileMap.TileSideInMeters = 1.4;
+                {
+                    let mut game_state = &mut *(memory.permanent_storage as *mut GameState);
+                    let World = game_state.world.as_mut().unwrap();
+                    let world_arena = &mut game_state.WorldArena;
+                    TileMap.TileChunks = &mut *PushArray::<tile_chunk>(
+                        world_arena,
+                        TileMap.TileChunkCountX * TileMap.TileChunkCountY * TileMap.TileChunkCountZ,
+                    );
+                }
+            }
 
             let mut RandomNumberIndex = 0;
             let TilesPerWidth = 17;
@@ -646,9 +650,12 @@ pub extern "C" fn game_update_and_render(
                             }
                         }
 
+                        //2 MUTABLE BORROW IS ALLOWED IF THE LAST INSTANCE OF THE MUTABLE BORROW ISNT REUSED
+                        let game_state = &mut *(memory.permanent_storage as *mut GameState);
+                        let World = game_state.world.as_mut().unwrap();
                         SetTileValue(
                             &mut game_state.WorldArena,
-                            World.TileMap,
+                            &mut World.TileMap.as_mut().unwrap(),
                             AbsTileX,
                             AbsTileY,
                             AbsTileZ,
@@ -686,8 +693,9 @@ pub extern "C" fn game_update_and_render(
             memory.is_initalized = true as bool32;
         }
 
-        let World = game_state.world;
-        let TileMap = &mut *(*World).TileMap;
+        let mut game_state = &mut *(memory.permanent_storage as *mut GameState);
+        let World = game_state.world.as_ref().unwrap();
+        let TileMap = World.TileMap.as_ref().unwrap();
 
         let TileSideInPixels = 60;
         let MetersToPixels = TileSideInPixels as f32 / TileMap.TileSideInMeters as f32;
