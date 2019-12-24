@@ -2,6 +2,15 @@
 #![allow(dead_code)]
 use crate::bool32;
 use std::convert::TryInto;
+
+// NOT IMPLEMENTED BECAUSE I HAVE NO IDEA WHERE TO FIND _rotl
+// SEE EPISODE 46 , 1:38:00
+/* pub fn RotateLeft(value: u32, amount: i32) -> u32 {
+    let result = _rotl();
+
+    return result;
+} */
+
 pub fn RoundReal32ToInt32(Real32: f32) -> i32 {
     let result = Real32.round() as i32;
     return result;
