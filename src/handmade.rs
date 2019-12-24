@@ -22,6 +22,7 @@ type bool32 = i32;
 mod handmade_intrinsics;
 use core::mem::size_of;
 use handmade_intrinsics::*;
+use std::convert::TryFrom;
 mod handmade_tile;
 use handmade_tile::*;
 use std::{convert::TryInto, ffi::c_void, ptr::null_mut};
@@ -158,28 +159,46 @@ impl Default for memory_arena {
         }
     }
 }
-#[derive(Default)]
-pub struct GameState<'a, 'b> {
+#[derive(Default, Copy, Clone)]
+struct entity {
+    Exists: bool,
+    P: tile_map_position,
+    dP: v2,
+    FacingDirection: u32,
+    Width: f32,
+    Height: f32,
+}
+pub struct GameState<'a> {
     WorldArena: memory_arena,
-    world: Option<&'a mut world<'b>>,
-    PlayerP: tile_map_position,
+    world: Option<&'a mut world<'a>>,
+
+    CameraFollowingEntityIndex: u32,
     CameraP: tile_map_position,
-    dPlayerP: v2,
+
+    PlayerIndexForController: [u32; 5], //GameInput::default().controllers.len() IS THE LENGTH, DOUBLE CHECK TO MATCH
+    EntityCount: u32,
+    Entities: [entity; 256],
+
     Backdrop: loaded_bitmap,
-    HeroFacingDirection: u32,
     HeroBitmaps: [hero_bitmaps; 4],
+
+    //REMOVE
+    HeroFacingDirection: u32,
+    dPlayerP: v2,
+    PlayerP: tile_map_position,
 }
 
 /* impl Default for GameState<'_, 'b> {
     fn default() -> Self {
         GameState {
             WorldArena: memory_arena::default(),
-            world: None,
-            PlayerP: tile_map_position::default(),
+            CameraFollowingEntityIndex: 0,
+            world: 0 as *mut world,
             CameraP: tile_map_position::default(),
-            dPlayerP: v2::default(),
+            PlayerIndexForController: [0, 0, 0, 0, 0],
+            EntityCount: 0,
+            Entities: [entity::default(); 256],
             Backdrop: loaded_bitmap::default(),
-            HeroFacingDirection: 0,
             HeroBitmaps: [
                 hero_bitmaps::default(),
                 hero_bitmaps::default(),
@@ -417,6 +436,179 @@ unsafe fn DEBUGLoadBMP(
     return result;
 }
 
+/* fn GetEntity(GameState: &GameState, Index: u32) -> Option<&mut entity> {
+    let mut Entity = None;
+
+    if (Index > 0) && (Index < (GameState.Entities.len()).try_into().unwrap()) {
+        Entity = Some(&mut GameState.Entities[usize::try_from(Index).unwrap()]);
+    }
+
+    return Entity;
+}
+fn InitializePlayer(GameState: &GameState, EntityIndex: u32) {
+    let Entity = GetEntity(GameState, EntityIndex);
+
+    match Entity {
+        Some(Entity) => {
+            Entity.Exists = true;
+            Entity.P.AbsTileX = 1;
+            Entity.P.AbsTileY = 3;
+            Entity.P.Offset.X = 5.0;
+            Entity.P.Offset.Y = 5.0;
+            Entity.Height = 1.4;
+            Entity.Width = 0.75 * Entity.Height;
+        }
+        None => {}
+    }
+
+    //if(!GetEntity(GameState, GameState->CameraFollowingEntityIndex)) c++ version
+    if GetEntity(GameState, GameState.CameraFollowingEntityIndex).is_none() {
+        GameState.CameraFollowingEntityIndex = EntityIndex;
+    }
+} */
+
+fn AddEntity(GameState: &mut GameState) -> u32 {
+    GameState.EntityCount += 1;
+    let EntityIndex = GameState.EntityCount;
+
+    let Entity = &mut GameState.Entities[usize::try_from(EntityIndex).unwrap()];
+    *Entity = entity::default();
+
+    return EntityIndex;
+}
+
+/*
+//DO NOT FIX UNTIL TILEMAP IS MADE SAFE
+//original takes gamestate opposed to tilemap but should probably pass in tilemap if it doesn't utilzie the gamestate struct fields
+fn MovePlayer(GameState: &mut GameState, Entity: &mut entity, dt: f32, mut ddP: v2) {
+    let TileMap = GameState.world.as_mut().unwrap().TileMap.as_mut().unwrap();
+
+    if (ddP.X != 0.0) && (ddP.Y != 0.0) {
+        ddP *= 0.707106781187;
+    }
+
+    let PlayerSpeed = 50.0; // m/s^2
+    ddP *= PlayerSpeed;
+
+    // TODO(casey): ODE here!
+    ddP += -8.0 * Entity.dP;
+
+    let OldPlayerP = Entity.P;
+    let mut NewPlayerP = OldPlayerP;
+    let PlayerDelta = 0.5 * ddP * Square(dt) + Entity.dP * dt;
+    NewPlayerP.Offset += PlayerDelta;
+    Entity.dP = ddP * dt + Entity.dP;
+    NewPlayerP = RecanonicalizePosition(TileMap, NewPlayerP);
+    // TODO(casey): Delta function that auto-recanonicalizes
+
+    let mut PlayerLeft = NewPlayerP;
+    PlayerLeft.Offset.X -= 0.5 * Entity.Width;
+    PlayerLeft = RecanonicalizePosition(TileMap, PlayerLeft);
+    let mut PlayerRight = NewPlayerP;
+    PlayerRight.Offset.X += 0.5 * Entity.Width;
+    PlayerRight = RecanonicalizePosition(TileMap, PlayerRight);
+
+    let mut Collided = false;
+    let mut ColP = tile_map_position::default();
+    if (!IsTileMapPointEmpty(TileMap, NewPlayerP)) {
+        ColP = NewPlayerP;
+        Collided = true;
+    }
+    if (!IsTileMapPointEmpty(TileMap, PlayerLeft)) {
+        ColP = PlayerLeft;
+        Collided = true;
+    }
+    if (!IsTileMapPointEmpty(TileMap, PlayerRight)) {
+        ColP = PlayerRight;
+        Collided = true;
+    }
+
+    if (Collided) {
+        let mut r = v2::default();
+        if (ColP.AbsTileX < Entity.P.AbsTileX) {
+            r = v2 { X: 1.0, Y: 0.0 };
+        }
+        if (ColP.AbsTileX > Entity.P.AbsTileX) {
+            r = v2 { X: -1.0, Y: 0.0 };
+        }
+        if (ColP.AbsTileY < Entity.P.AbsTileY) {
+            r = v2 { X: 0.0, Y: 1.0 };
+        }
+        if (ColP.AbsTileY > Entity.P.AbsTileY) {
+            r = v2 { X: 0.0, Y: -1.0 };
+        }
+
+        Entity.dP = Entity.dP - 1.0 * Inner(Entity.dP, r) * r;
+    } else {
+        Entity.P = NewPlayerP;
+    }
+    /* #else
+        uint32 MinTileX = 0;
+        uint32 MinTileY = 0;
+        uint32 OnePastMaxTileX = 0;
+        uint32 OnePastMaxTileY = 0;
+        uint32 AbsTileZ = Entity->P.AbsTileZ;
+        tile_map_position BestPlayerP = Entity->P;
+        real32 BestDistanceSq = LengthSq(PlayerDelta);
+        for(uint32 AbsTileY = MinTileY;
+            AbsTileY != OnePastMaxTileY;
+            ++AbsTileY)
+        {
+            for(uint32 AbsTileX = MinTileX;
+                AbsTileX != OnePastMaxTileX;
+                ++AbsTileX)
+            {
+                tile_map_position TestTileP = CenteredTilePoint(AbsTileX, AbsTileY, AbsTileZ);
+                uint32 TileValue = GetTileValue(TileMap, TestTileP);
+                if(IsTileValueEmpty(TileValue))
+                {
+                    v2 MinCorner = -0.5f*v2{TileMap->TileSideInMeters, TileMap->TileSideInMeters};
+                    v2 MaxCorner = 0.5f*v2{TileMap->TileSideInMeters, TileMap->TileSideInMeters};
+
+                    tile_map_difference RelNewPlayerP = Subtract(TileMap, &TestTileP, &NewPlayerP);
+                    v2 TestP = ClosestPointInRectangle(MinCorner, MaxCorner, RelNewPlayerP);
+                    TestDistanceSq = ;
+                    if(BestDistanceSq > TestDistanceSq)
+                    {
+                        BestPlayerP = ;
+                        BestDistanceSq = ;
+                    }
+                }
+            }
+        }
+    #endif */
+
+    //
+    // NOTE(casey): Update camera/player Z based on last movement.
+    //
+    if !AreOnSameTile(&OldPlayerP, &Entity.P) {
+        //TODO: MAKE TILEMAP NOT TAKE IN RAW POINTER
+        let NewTileValue = GetTileValue_P(TileMap, Entity.P);
+
+        if NewTileValue == 3 {
+            Entity.P.AbsTileZ += 1;
+        } else if NewTileValue == 4 {
+            Entity.P.AbsTileZ -= 1;
+        }
+    }
+
+    if (Entity.dP.X == 0.0) && (Entity.dP.Y == 0.0) {
+        // NOTE(casey): Leave FacingDirection whatever it was
+    } else if Entity.dP.X.abs() > Entity.dP.Y.abs() {
+        if Entity.dP.X > 0.0 {
+            Entity.FacingDirection = 0;
+        } else {
+            Entity.FacingDirection = 2;
+        }
+    } else {
+        if Entity.dP.Y > 0.0 {
+            Entity.FacingDirection = 1;
+        } else {
+            Entity.FacingDirection = 3;
+        }
+    }
+}
+ */
 #[no_mangle]
 pub extern "C" fn game_update_and_render(
     thread: &thread_context,
@@ -429,12 +621,8 @@ pub extern "C" fn game_update_and_render(
         let PlayerWidth: f32 = 0.75 * PlayerHeight;
 
         if !(memory.is_initalized != 0) {
-            /*  let mut test = v2::default();
-            let mut t2 = v2 { X: 2.0, Y: 2.0 };
-            test += t2 * 0.50;
-            dbg!(test); */
-
             let mut game_state = &mut *(memory.permanent_storage as *mut GameState);
+            println!("{:#?}", game_state.CameraFollowingEntityIndex);
             game_state.Backdrop = DEBUGLoadBMP(
                 thread,
                 memory.debug_platform_read_entire_file,

@@ -59,7 +59,7 @@ impl Default for tile_map {
     }
 }
 
-pub unsafe fn RecanonicalizeCoord(TileMap: &tile_map, Tile: &mut u32, TileRel: &mut f32) {
+pub fn RecanonicalizeCoord(TileMap: &tile_map, Tile: &mut u32, TileRel: &mut f32) {
     // TODO(casey): Need to do something that doesn't use the divide/multiply method
     // for recanonicalizing because this can end up rounding back on to the tile
     // you just came from.
@@ -74,10 +74,7 @@ pub unsafe fn RecanonicalizeCoord(TileMap: &tile_map, Tile: &mut u32, TileRel: &
     //Assert(*TileRel <= 0.5f*TileMap.TileSideInMeters);
 }
 
-pub unsafe fn RecanonicalizePosition(
-    TileMap: &tile_map,
-    Pos: tile_map_position,
-) -> tile_map_position {
+pub fn RecanonicalizePosition(TileMap: &tile_map, Pos: tile_map_position) -> tile_map_position {
     let mut result = Pos;
 
     RecanonicalizeCoord(TileMap, &mut result.AbsTileX, &mut result.Offset.X);
@@ -85,8 +82,6 @@ pub unsafe fn RecanonicalizePosition(
 
     return result;
 }
-
-//inline tile_chunk *
 pub unsafe fn GetTileChunk(
     TileMap: &tile_map,
     TileChunkX: u32,
@@ -154,35 +149,38 @@ pub fn SetTileValueUnchecked(
     }
 }
 
-pub unsafe fn GetTileValue_(
+pub fn GetTileValue_(
     TileMap: &tile_map,
     TileChunk: *mut tile_chunk,
     TestTileX: u32,
     TestTileY: u32,
 ) -> u32 {
     let mut TileChunkValue = 0;
+    unsafe {
+        if TileChunk != null_mut() && (*TileChunk).Tiles != null_mut() {
+            TileChunkValue = GetTileValueUnchecked(TileMap, TileChunk, TestTileX, TestTileY);
+        }
 
-    if TileChunk != null_mut() && (*TileChunk).Tiles != null_mut() {
-        TileChunkValue = GetTileValueUnchecked(TileMap, TileChunk, TestTileX, TestTileY);
+        return TileChunkValue;
     }
-
-    return TileChunkValue;
 }
 
-pub unsafe fn SetTileValue_(
+pub fn SetTileValue_(
     TileMap: *mut tile_map,
     TileChunk: *mut tile_chunk,
     TestTileX: u32,
     TestTileY: u32,
     TileValue: u32,
 ) {
-    if TileChunk != null_mut() && (*TileChunk).Tiles != null_mut() {
-        // can remove if check since .unwrap() does  the check
-        SetTileValueUnchecked(TileMap, TileChunk, TestTileX, TestTileY, TileValue);
+    unsafe {
+        if TileChunk != null_mut() && (*TileChunk).Tiles != null_mut() {
+            // can remove if check since .unwrap() does  the check
+            SetTileValueUnchecked(TileMap, TileChunk, TestTileX, TestTileY, TileValue);
+        }
     }
 }
 
-pub unsafe fn GetChunkPositionFor(
+pub fn GetChunkPositionFor(
     TileMap: &tile_map,
     AbsTileX: u32,
     AbsTileY: u32,
@@ -198,29 +196,31 @@ pub unsafe fn GetChunkPositionFor(
     return result;
 }
 
-pub unsafe fn GetTileValue(TileMap: &tile_map, AbsTileX: u32, AbsTileY: u32, AbsTileZ: u32) -> u32 {
+pub fn GetTileValue(TileMap: &tile_map, AbsTileX: u32, AbsTileY: u32, AbsTileZ: u32) -> u32 {
     let ChunkPos = GetChunkPositionFor(TileMap, AbsTileX, AbsTileY, AbsTileZ);
-    let TileChunk = GetTileChunk(
-        TileMap,
-        ChunkPos.TileChunkX,
-        ChunkPos.TileChunkY,
-        ChunkPos.TileChunkZ,
-    );
-    let TileChunkValue = GetTileValue_(TileMap, TileChunk, ChunkPos.RelTileX, ChunkPos.RelTileY);
+    unsafe {
+        let TileChunk = GetTileChunk(
+            TileMap,
+            ChunkPos.TileChunkX,
+            ChunkPos.TileChunkY,
+            ChunkPos.TileChunkZ,
+        );
+        let TileChunkValue =
+            GetTileValue_(TileMap, TileChunk, ChunkPos.RelTileX, ChunkPos.RelTileY);
 
-    return TileChunkValue;
+        return TileChunkValue;
+    }
 }
-pub unsafe fn GetTileValue_P(TileMap: &tile_map, Pos: tile_map_position) -> u32 {
+pub fn GetTileValue_P(TileMap: &tile_map, Pos: tile_map_position) -> u32 {
     let TileChunkValue = GetTileValue(TileMap, Pos.AbsTileX, Pos.AbsTileY, Pos.AbsTileZ);
 
     return TileChunkValue;
 }
 
-pub unsafe fn IsTileMapPointEmpty(TileMap: &tile_map, CanPos: tile_map_position) -> bool {
+pub fn IsTileMapPointEmpty(TileMap: &tile_map, CanPos: tile_map_position) -> bool {
     let TileChunkValue = GetTileValue(TileMap, CanPos.AbsTileX, CanPos.AbsTileY, CanPos.AbsTileZ);
-    let Empty = (TileChunkValue == 1) || (TileChunkValue == 3) || (TileChunkValue == 4);
-
-    return Empty;
+    let empty = (TileChunkValue == 1) || (TileChunkValue == 3) || (TileChunkValue == 4);
+    return empty;
 }
 
 // function overloading

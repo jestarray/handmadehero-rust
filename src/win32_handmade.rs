@@ -1182,14 +1182,14 @@ unsafe fn win32_process_pending_messages(
                         }
                         VK_ESCAPE => {
                             win32_process_keyboard_message(
-                                &mut keyboard_controller.start(),
+                                &mut keyboard_controller.back(),
                                 is_down,
                             );
                             RUNNING = false;
                         }
                         VK_SPACE => {
                             win32_process_keyboard_message(
-                                &mut keyboard_controller.back(),
+                                &mut keyboard_controller.start(),
                                 is_down,
                             );
                         }
