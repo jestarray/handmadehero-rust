@@ -477,13 +477,35 @@ fn AddEntity(GameState: &mut GameState) -> u32 {
 
     return EntityIndex;
 }
+fn TestWall(
+    WallX: f32,
+    RelX: f32,
+    RelY: f32,
+    PlayerDeltaX: f32,
+    PlayerDeltaY: f32,
+    tMin: &mut f32,
+    MinY: f32,
+    MaxY: f32,
+) {
+    let tEpsilon = 0.0001;
+    if (PlayerDeltaX != 0.0) {
+        let tResult = (WallX - RelX) / PlayerDeltaX;
+        let Y = RelY + tResult * PlayerDeltaY;
+        if ((tResult >= 0.0) && (*tMin > tResult)) {
+            if ((Y >= MinY) && (Y <= MaxY)) {
+                *tMin = 0.0f32.max(tResult - tEpsilon);
+            }
+        }
+    }
+}
 
 //original takes gamestate opposed to tilemap but should probably pass in tilemap if it doesn't utilzie the gamestate struct fields
 fn MovePlayer(GameState: &mut GameState, Entity: &mut entity, dt: f32, mut ddP: v2) {
     let TileMap = GameState.world.as_mut().unwrap().TileMap.as_mut().unwrap();
 
-    if (ddP.X != 0.0) && (ddP.Y != 0.0) {
-        ddP *= 0.707106781187;
+    let ddPLength = LengthSq(ddP);
+    if ddPLength > 1.0 {
+        ddP *= 1.0 / ddPLength.sqrt();
     }
 
     let PlayerSpeed = 50.0; // m/s^2
@@ -493,13 +515,13 @@ fn MovePlayer(GameState: &mut GameState, Entity: &mut entity, dt: f32, mut ddP: 
     ddP += -8.0 * Entity.dP;
 
     let OldPlayerP = Entity.P;
-    let mut NewPlayerP = OldPlayerP;
     let PlayerDelta = 0.5 * ddP * Square(dt) + Entity.dP * dt;
-    NewPlayerP.Offset += PlayerDelta;
     Entity.dP = ddP * dt + Entity.dP;
+    let mut NewPlayerP = OldPlayerP;
+    NewPlayerP.Offset += PlayerDelta;
     NewPlayerP = RecanonicalizePosition(TileMap, NewPlayerP);
     // TODO(casey): Delta function that auto-recanonicalizes
-
+    /*
     let mut PlayerLeft = NewPlayerP;
     PlayerLeft.Offset.X -= 0.5 * Entity.Width;
     PlayerLeft = RecanonicalizePosition(TileMap, PlayerLeft);
@@ -540,42 +562,81 @@ fn MovePlayer(GameState: &mut GameState, Entity: &mut entity, dt: f32, mut ddP: 
         Entity.dP = Entity.dP - 1.0 * Inner(Entity.dP, r) * r;
     } else {
         Entity.P = NewPlayerP;
-    }
-    /* #else
-        uint32 MinTileX = 0;
-        uint32 MinTileY = 0;
-        uint32 OnePastMaxTileX = 0;
-        uint32 OnePastMaxTileY = 0;
-        uint32 AbsTileZ = Entity->P.AbsTileZ;
-        tile_map_position BestPlayerP = Entity->P;
-        real32 BestDistanceSq = LengthSq(PlayerDelta);
-        for(uint32 AbsTileY = MinTileY;
-            AbsTileY != OnePastMaxTileY;
-            ++AbsTileY)
-        {
-            for(uint32 AbsTileX = MinTileX;
-                AbsTileX != OnePastMaxTileX;
-                ++AbsTileX)
-            {
-                tile_map_position TestTileP = CenteredTilePoint(AbsTileX, AbsTileY, AbsTileZ);
-                uint32 TileValue = GetTileValue(TileMap, TestTileP);
-                if(IsTileValueEmpty(TileValue))
-                {
-                    v2 MinCorner = -0.5f*v2{TileMap->TileSideInMeters, TileMap->TileSideInMeters};
-                    v2 MaxCorner = 0.5f*v2{TileMap->TileSideInMeters, TileMap->TileSideInMeters};
+    } */
+    let MinTileX = Minimum(OldPlayerP.AbsTileX, NewPlayerP.AbsTileX);
+    let MinTileY = Minimum(OldPlayerP.AbsTileY, NewPlayerP.AbsTileY);
+    let OnePastMaxTileX = Maximum(OldPlayerP.AbsTileX, NewPlayerP.AbsTileX) + 1;
+    let OnePastMaxTileY = Maximum(OldPlayerP.AbsTileY, NewPlayerP.AbsTileY) + 1;
 
-                    tile_map_difference RelNewPlayerP = Subtract(TileMap, &TestTileP, &NewPlayerP);
-                    v2 TestP = ClosestPointInRectangle(MinCorner, MaxCorner, RelNewPlayerP);
-                    TestDistanceSq = ;
-                    if(BestDistanceSq > TestDistanceSq)
-                    {
-                        BestPlayerP = ;
-                        BestDistanceSq = ;
-                    }
-                }
+    let AbsTileZ = Entity.P.AbsTileZ;
+    let mut tMin = 1.0;
+    for AbsTileY in MinTileY..OnePastMaxTileY {
+        for AbsTileX in MinTileX..OnePastMaxTileX {
+            let TestTileP = CenteredTilePoint(AbsTileX, AbsTileY, AbsTileZ);
+            let TileValue = GetTileValue_P(TileMap, TestTileP);
+            if !IsTileValueEmpty(TileValue) {
+                let MinCorner = -0.5
+                    * v2 {
+                        X: TileMap.TileSideInMeters,
+                        Y: TileMap.TileSideInMeters,
+                    };
+                let MaxCorner = 0.5
+                    * v2 {
+                        X: TileMap.TileSideInMeters,
+                        Y: TileMap.TileSideInMeters,
+                    };
+
+                let RelOldPlayerP = Subtract(TileMap, &OldPlayerP, &TestTileP);
+                let Rel = RelOldPlayerP.dXY;
+
+                TestWall(
+                    MinCorner.X,
+                    Rel.X,
+                    Rel.Y,
+                    PlayerDelta.X,
+                    PlayerDelta.Y,
+                    &mut tMin,
+                    MinCorner.Y,
+                    MaxCorner.Y,
+                );
+                TestWall(
+                    MaxCorner.X,
+                    Rel.X,
+                    Rel.Y,
+                    PlayerDelta.X,
+                    PlayerDelta.Y,
+                    &mut tMin,
+                    MinCorner.Y,
+                    MaxCorner.Y,
+                );
+                TestWall(
+                    MinCorner.Y,
+                    Rel.Y,
+                    Rel.X,
+                    PlayerDelta.Y,
+                    PlayerDelta.X,
+                    &mut tMin,
+                    MinCorner.X,
+                    MaxCorner.X,
+                );
+                TestWall(
+                    MaxCorner.Y,
+                    Rel.Y,
+                    Rel.X,
+                    PlayerDelta.Y,
+                    PlayerDelta.X,
+                    &mut tMin,
+                    MinCorner.X,
+                    MaxCorner.X,
+                );
             }
         }
-    #endif */
+    }
+
+    NewPlayerP = OldPlayerP;
+    NewPlayerP.Offset += tMin * PlayerDelta;
+    Entity.P = NewPlayerP;
+    NewPlayerP = RecanonicalizePosition(TileMap, NewPlayerP);
 
     //
     // NOTE(casey): Update camera/player Z based on last movement.
@@ -959,8 +1020,6 @@ pub extern "C" fn game_update_and_render(
             }
         }
 
-        let width = buffer.width;
-        let height = buffer.height;
         DrawBitmap(buffer, &game_state.Backdrop, 0.0, 0.0, 0, 0);
         let ScreenCenterX = 0.5 * buffer.width as f32;
         let ScreenCenterY = 0.5 * buffer.height as f32;
@@ -1005,8 +1064,8 @@ pub extern "C" fn game_update_and_render(
                         Y: ScreenCenterY + MetersToPixels * game_state.CameraP.Offset.Y
                             - (RelRow as f32) * TileSideInPixels as f32,
                     };
-                    let Min = Cen - TileSide;
-                    let Max = Cen + TileSide;
+                    let Min = Cen - 0.9 * TileSide;
+                    let Max = Cen + 0.9 * TileSide;
                     /*  v2 Min = Cen - TileSide;
                     v2 Max = Cen + TileSide; */
                     DrawRectangle(buffer, Min, Max, Gray, Gray, Gray);

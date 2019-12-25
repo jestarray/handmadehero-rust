@@ -11,6 +11,14 @@ use std::convert::TryInto;
     return result;
 } */
 
+// MAX & MIN DO NOT WORK FOR FLOATS AS FLOATS HAVE THEIR OWN SEPERATE VERIONS
+pub fn Maximum<T: Ord>(x: T, y: T) -> T {
+    return std::cmp::max(x, y);
+}
+pub fn Minimum<T: Ord>(x: T, y: T) -> T {
+    return std::cmp::min(x, y);
+}
+
 pub fn RoundReal32ToInt32(Real32: f32) -> i32 {
     let result = Real32.round() as i32;
     return result;

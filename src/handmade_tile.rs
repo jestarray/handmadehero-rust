@@ -216,10 +216,14 @@ pub fn GetTileValue_P(TileMap: &tile_map, Pos: tile_map_position) -> u32 {
 
     return TileChunkValue;
 }
+pub fn IsTileValueEmpty(TileValue: u32) -> bool {
+    let Empty = (TileValue == 1) || (TileValue == 3) || (TileValue == 4);
 
+    return Empty;
+}
 pub fn IsTileMapPointEmpty(TileMap: &tile_map, CanPos: tile_map_position) -> bool {
     let TileChunkValue = GetTileValue(TileMap, CanPos.AbsTileX, CanPos.AbsTileY, CanPos.AbsTileZ);
-    let empty = (TileChunkValue == 1) || (TileChunkValue == 3) || (TileChunkValue == 4);
+    let empty = IsTileValueEmpty(TileChunkValue);
     return empty;
 }
 
@@ -291,6 +295,16 @@ pub fn Subtract(
 pub fn AreOnSameTile(A: &tile_map_position, B: &tile_map_position) -> bool {
     let result =
         (A.AbsTileX == B.AbsTileX) && (A.AbsTileY == B.AbsTileY) && (A.AbsTileZ == B.AbsTileZ);
+
+    return result;
+}
+
+pub fn CenteredTilePoint(AbsTileX: u32, AbsTileY: u32, AbsTileZ: u32) -> tile_map_position {
+    let mut result = tile_map_position::default();
+
+    result.AbsTileX = AbsTileX;
+    result.AbsTileY = AbsTileY;
+    result.AbsTileZ = AbsTileZ;
 
     return result;
 }

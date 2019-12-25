@@ -86,3 +86,8 @@ pub fn Inner(a: v2, b: v2) -> f32 {
     let result = a.X * b.X + a.Y * b.Y;
     return result;
 }
+
+pub fn LengthSq(a: v2) -> f32 {
+    let result = Inner(a, a);
+    return result;
+}
