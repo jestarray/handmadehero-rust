@@ -454,10 +454,10 @@ fn InitializePlayer(GameState: &mut GameState, EntityIndex: u32) {
             Entity.Exists = true;
             Entity.P.AbsTileX = 1;
             Entity.P.AbsTileY = 3;
-            Entity.P.Offset.X = 5.0;
-            Entity.P.Offset.Y = 5.0;
-            Entity.Height = 1.4;
-            Entity.Width = 0.75 * Entity.Height;
+            Entity.P.Offset_.X = 0.0;
+            Entity.P.Offset_.Y = 0.0;
+            Entity.Height = 0.5; //1.4
+            Entity.Width = 1.0;
         }
         None => {}
     }
@@ -486,17 +486,20 @@ fn TestWall(
     tMin: &mut f32,
     MinY: f32,
     MaxY: f32,
-) {
-    let tEpsilon = 0.0001;
-    if (PlayerDeltaX != 0.0) {
+) -> bool {
+    let mut hit = false;
+    let tEpsilon = 0.00001;
+    if PlayerDeltaX != 0.0 {
         let tResult = (WallX - RelX) / PlayerDeltaX;
         let Y = RelY + tResult * PlayerDeltaY;
-        if ((tResult >= 0.0) && (*tMin > tResult)) {
-            if ((Y >= MinY) && (Y <= MaxY)) {
+        if (tResult >= 0.0) && (*tMin > tResult) {
+            if (Y >= MinY) && (Y <= MaxY) {
                 *tMin = 0.0f32.max(tResult - tEpsilon);
+                hit = true;
             }
         }
     }
+    return hit;
 }
 
 //original takes gamestate opposed to tilemap but should probably pass in tilemap if it doesn't utilzie the gamestate struct fields
@@ -515,18 +518,16 @@ fn MovePlayer(GameState: &mut GameState, Entity: &mut entity, dt: f32, mut ddP: 
     ddP += -8.0 * Entity.dP;
 
     let OldPlayerP = Entity.P;
-    let PlayerDelta = 0.5 * ddP * Square(dt) + Entity.dP * dt;
+    let mut PlayerDelta = 0.5 * ddP * Square(dt) + Entity.dP * dt;
     Entity.dP = ddP * dt + Entity.dP;
-    let mut NewPlayerP = OldPlayerP;
-    NewPlayerP.Offset += PlayerDelta;
-    NewPlayerP = RecanonicalizePosition(TileMap, NewPlayerP);
+    let NewPlayerP = Offset(TileMap, OldPlayerP, PlayerDelta);
     // TODO(casey): Delta function that auto-recanonicalizes
     /*
     let mut PlayerLeft = NewPlayerP;
-    PlayerLeft.Offset.X -= 0.5 * Entity.Width;
+    PlayerLeft.Offset._X -= 0.5 * Entity.Width;
     PlayerLeft = RecanonicalizePosition(TileMap, PlayerLeft);
     let mut PlayerRight = NewPlayerP;
-    PlayerRight.Offset.X += 0.5 * Entity.Width;
+    PlayerRight.Offset._X += 0.5 * Entity.Width;
     PlayerRight = RecanonicalizePosition(TileMap, PlayerRight);
 
     let mut Collided = false;
@@ -563,80 +564,103 @@ fn MovePlayer(GameState: &mut GameState, Entity: &mut entity, dt: f32, mut ddP: 
     } else {
         Entity.P = NewPlayerP;
     } */
-    let MinTileX = Minimum(OldPlayerP.AbsTileX, NewPlayerP.AbsTileX);
-    let MinTileY = Minimum(OldPlayerP.AbsTileY, NewPlayerP.AbsTileY);
-    let OnePastMaxTileX = Maximum(OldPlayerP.AbsTileX, NewPlayerP.AbsTileX) + 1;
-    let OnePastMaxTileY = Maximum(OldPlayerP.AbsTileY, NewPlayerP.AbsTileY) + 1;
+    let mut MinTileX = Minimum(OldPlayerP.AbsTileX, NewPlayerP.AbsTileX);
+    let mut MinTileY = Minimum(OldPlayerP.AbsTileY, NewPlayerP.AbsTileY);
+    let mut MaxTileX = Maximum(OldPlayerP.AbsTileX, NewPlayerP.AbsTileX);
+    let mut MaxTileY = Maximum(OldPlayerP.AbsTileY, NewPlayerP.AbsTileY);
+
+    let EntityTileWidth = (Entity.Width / TileMap.TileSideInMeters).ceil() as u32;
+    let EntityTileHeight = (Entity.Height / TileMap.TileSideInMeters).ceil() as u32;
+
+    MinTileX -= EntityTileWidth;
+    MinTileY -= EntityTileHeight;
+    MaxTileX += EntityTileWidth;
+    MaxTileY += EntityTileHeight;
 
     let AbsTileZ = Entity.P.AbsTileZ;
-    let mut tMin = 1.0;
-    for AbsTileY in MinTileY..OnePastMaxTileY {
-        for AbsTileX in MinTileX..OnePastMaxTileX {
-            let TestTileP = CenteredTilePoint(AbsTileX, AbsTileY, AbsTileZ);
-            let TileValue = GetTileValue_P(TileMap, TestTileP);
-            if !IsTileValueEmpty(TileValue) {
-                let MinCorner = -0.5
-                    * v2 {
-                        X: TileMap.TileSideInMeters,
-                        Y: TileMap.TileSideInMeters,
-                    };
-                let MaxCorner = 0.5
-                    * v2 {
-                        X: TileMap.TileSideInMeters,
-                        Y: TileMap.TileSideInMeters,
-                    };
+    let mut tRemaining = 1.0;
+    let mut iteration = 0;
+    while iteration < 4 && tRemaining > 0.0 {
+        let mut tMin = 1.0;
+        let mut WallNormal = v2::default();
+        for AbsTileY in MinTileY..=MaxTileY {
+            for AbsTileX in MinTileX..=MaxTileX {
+                let TestTileP = CenteredTilePoint(AbsTileX, AbsTileY, AbsTileZ);
+                let TileValue = GetTileValue_P(TileMap, TestTileP);
+                if !IsTileValueEmpty(TileValue) {
+                    let DiameterW = TileMap.TileSideInMeters + Entity.Width;
+                    let DiameterH = TileMap.TileSideInMeters + Entity.Height;
+                    let MinCorner = -0.5
+                        * v2 {
+                            X: DiameterW,
+                            Y: DiameterH,
+                        };
+                    let MaxCorner = 0.5
+                        * v2 {
+                            X: DiameterW,
+                            Y: DiameterH,
+                        };
 
-                let RelOldPlayerP = Subtract(TileMap, &OldPlayerP, &TestTileP);
-                let Rel = RelOldPlayerP.dXY;
+                    let RelOldPlayerP = Subtract(TileMap, &Entity.P, &TestTileP);
+                    let Rel = RelOldPlayerP.dXY;
 
-                TestWall(
-                    MinCorner.X,
-                    Rel.X,
-                    Rel.Y,
-                    PlayerDelta.X,
-                    PlayerDelta.Y,
-                    &mut tMin,
-                    MinCorner.Y,
-                    MaxCorner.Y,
-                );
-                TestWall(
-                    MaxCorner.X,
-                    Rel.X,
-                    Rel.Y,
-                    PlayerDelta.X,
-                    PlayerDelta.Y,
-                    &mut tMin,
-                    MinCorner.Y,
-                    MaxCorner.Y,
-                );
-                TestWall(
-                    MinCorner.Y,
-                    Rel.Y,
-                    Rel.X,
-                    PlayerDelta.Y,
-                    PlayerDelta.X,
-                    &mut tMin,
-                    MinCorner.X,
-                    MaxCorner.X,
-                );
-                TestWall(
-                    MaxCorner.Y,
-                    Rel.Y,
-                    Rel.X,
-                    PlayerDelta.Y,
-                    PlayerDelta.X,
-                    &mut tMin,
-                    MinCorner.X,
-                    MaxCorner.X,
-                );
+                    if TestWall(
+                        MinCorner.X,
+                        Rel.X,
+                        Rel.Y,
+                        PlayerDelta.X,
+                        PlayerDelta.Y,
+                        &mut tMin,
+                        MinCorner.Y,
+                        MaxCorner.Y,
+                    ) {
+                        WallNormal = v2 { X: -1.0, Y: 0.0 };
+                    }
+                    if TestWall(
+                        MaxCorner.X,
+                        Rel.X,
+                        Rel.Y,
+                        PlayerDelta.X,
+                        PlayerDelta.Y,
+                        &mut tMin,
+                        MinCorner.Y,
+                        MaxCorner.Y,
+                    ) {
+                        WallNormal = v2 { X: 1.0, Y: 0.0 };
+                    }
+                    if TestWall(
+                        MinCorner.Y,
+                        Rel.Y,
+                        Rel.X,
+                        PlayerDelta.Y,
+                        PlayerDelta.X,
+                        &mut tMin,
+                        MinCorner.X,
+                        MaxCorner.X,
+                    ) {
+                        WallNormal = v2 { X: 0.0, Y: -1.0 };
+                    }
+                    if TestWall(
+                        MaxCorner.Y,
+                        Rel.Y,
+                        Rel.X,
+                        PlayerDelta.Y,
+                        PlayerDelta.X,
+                        &mut tMin,
+                        MinCorner.X,
+                        MaxCorner.X,
+                    ) {
+                        WallNormal = v2 { X: 0.0, Y: 1.0 };
+                    }
+                }
             }
         }
+        Entity.P = Offset(TileMap, Entity.P, tMin * PlayerDelta);
+        Entity.dP = Entity.dP - 1.0 * Inner(Entity.dP, WallNormal) * WallNormal;
+        PlayerDelta = PlayerDelta - 1.0 * Inner(PlayerDelta, WallNormal) * WallNormal;
+        tRemaining -= tMin * tRemaining;
+        iteration += 1;
     }
-
-    NewPlayerP = OldPlayerP;
-    NewPlayerP.Offset += tMin * PlayerDelta;
-    Entity.P = NewPlayerP;
-    NewPlayerP = RecanonicalizePosition(TileMap, NewPlayerP);
 
     //
     // NOTE(casey): Update camera/player Z based on last movement.
@@ -812,8 +836,12 @@ pub extern "C" fn game_update_and_render(
             let mut RandomNumberIndex = 0;
             let TilesPerWidth = 17;
             let TilesPerHeight = 9;
+
+            /*             let mut ScreenX = std::u32::MAX / 2;
+            let mut ScreenY = std::u32::MAX / 2; */
             let mut ScreenX = 0;
             let mut ScreenY = 0;
+
             let mut AbsTileZ = 0;
 
             // TODO(casey): Replace all this with real world generation!
@@ -1059,9 +1087,9 @@ pub extern "C" fn game_update_and_render(
                         Y: 0.5 * TileSideInPixels as f32,
                     };
                     let Cen = v2 {
-                        X: ScreenCenterX - MetersToPixels * game_state.CameraP.Offset.X
+                        X: ScreenCenterX - MetersToPixels * game_state.CameraP.Offset_.X
                             + (RelColumn as f32) * TileSideInPixels as f32,
-                        Y: ScreenCenterY + MetersToPixels * game_state.CameraP.Offset.Y
+                        Y: ScreenCenterY + MetersToPixels * game_state.CameraP.Offset_.Y
                             - (RelRow as f32) * TileSideInPixels as f32,
                     };
                     let Min = Cen - 0.9 * TileSide;
@@ -1083,7 +1111,7 @@ pub extern "C" fn game_update_and_render(
                 let PlayerGroundPointY = ScreenCenterY - MetersToPixels * Diff.dXY.Y;
                 let PlayerLeftTop = v2 {
                     X: PlayerGroundPointX - 0.5 * MetersToPixels * Entity.Width,
-                    Y: PlayerGroundPointY - MetersToPixels * Entity.Height,
+                    Y: PlayerGroundPointY - -0.5 * MetersToPixels * Entity.Height,
                 };
                 let EntityWidthHeight = v2 {
                     X: Entity.Width,
@@ -1219,23 +1247,6 @@ unsafe fn GameOutputSound(
         }
     } */
 }
-
-/* unsafe fn render_weird_gradient(
-    buffer: &mut GameOffScreenBuffer,
-    blue_offset: i32,
-    green_offset: i32,
-) {
-    let mut row = buffer.memory as *mut u8;
-    for y in 0..buffer.height {
-        let mut pixel = row as *mut [u8; 4]; //array of 4, u8s
-        for x in 0..buffer.width {
-            *pixel = [(x + blue_offset) as u8, (y + green_offset) as u8, 0, 0];
-            pixel = pixel.offset(1); // adds sizeof(pixel), 4
-        }
-        row = row.offset(buffer.pitch as isize);
-    }
-}
- */
 
 #[no_mangle]
 pub unsafe extern "C" fn GameGetSoundSamples(

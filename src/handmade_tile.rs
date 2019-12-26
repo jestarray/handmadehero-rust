@@ -12,7 +12,7 @@ pub struct tile_map_position {
     pub AbsTileZ: u32,
 
     // TODO(casey): Should these be from the center of a tile?
-    pub Offset: v2,
+    pub Offset_: v2,
 }
 
 #[derive(Default)]
@@ -77,8 +77,8 @@ pub fn RecanonicalizeCoord(TileMap: &tile_map, Tile: &mut u32, TileRel: &mut f32
 pub fn RecanonicalizePosition(TileMap: &tile_map, Pos: tile_map_position) -> tile_map_position {
     let mut result = Pos;
 
-    RecanonicalizeCoord(TileMap, &mut result.AbsTileX, &mut result.Offset.X);
-    RecanonicalizeCoord(TileMap, &mut result.AbsTileY, &mut result.Offset.Y);
+    RecanonicalizeCoord(TileMap, &mut result.AbsTileX, &mut result.Offset_.X);
+    RecanonicalizeCoord(TileMap, &mut result.AbsTileY, &mut result.Offset_.Y);
 
     return result;
 }
@@ -285,7 +285,7 @@ pub fn Subtract(
     };
     let dTileZ = A.AbsTileZ as f32 - B.AbsTileZ as f32;
 
-    result.dXY = TileMap.TileSideInMeters * dTileXY + (A.Offset - B.Offset);
+    result.dXY = TileMap.TileSideInMeters * dTileXY + (A.Offset_ - B.Offset_);
     // TODO(casey): Think about what we want to do about Z
     result.dZ = TileMap.TileSideInMeters * dTileZ;
 
@@ -307,4 +307,11 @@ pub fn CenteredTilePoint(AbsTileX: u32, AbsTileY: u32, AbsTileZ: u32) -> tile_ma
     result.AbsTileZ = AbsTileZ;
 
     return result;
+}
+
+pub fn Offset(TileMap: &tile_map, mut P: tile_map_position, Offset: v2) -> tile_map_position {
+    P.Offset_ += Offset;
+    P = RecanonicalizePosition(TileMap, P);
+
+    return P;
 }
