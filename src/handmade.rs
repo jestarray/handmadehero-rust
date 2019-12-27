@@ -138,7 +138,7 @@ pub struct GameButtonState {
     pub half_transition_count: i32,
     pub ended_down: i32,
 }
-#[derive(Default)]
+#[derive(Default, Debug)]
 struct world<'a> {
     TileMap: Option<&'a mut tile_map>,
 }
@@ -159,15 +159,47 @@ impl Default for memory_arena {
         }
     }
 }
+
 #[derive(Default, Copy, Clone)]
-struct entity {
-    Exists: bool,
-    P: tile_map_position,
+struct high_entity {
+    P: v2, // NOTE(casey): Relative to the camera!
     dP: v2,
+    AbsTileZ: u32,
     FacingDirection: u32,
+
+    Z: f32,
+    dZ: f32,
+
+    LowEntityIndex: u32,
+}
+
+#[derive(Copy, Clone)]
+enum entity_type {
+    EntityType_Null,
+    EntityType_Hero,
+    EntityType_Wall,
+}
+#[derive(Copy, Clone)]
+struct low_entity {
+    Type: entity_type,
+
+    P: tile_map_position,
     Width: f32,
     Height: f32,
+    // NOTE(casey): This is for "stairs"
+    Collides: bool,
+    dAbsTileZ: i32,
+
+    HighEntityIndex: u32,
 }
+
+#[derive(Default)]
+struct entity<'a> {
+    LowIndex: u32,
+    Low: Option<&'a mut low_entity>,
+    High: Option<&'a mut high_entity>,
+}
+
 pub struct GameState<'a> {
     WorldArena: memory_arena,
     world: Option<&'a mut world<'a>>,
@@ -176,10 +208,15 @@ pub struct GameState<'a> {
     CameraP: tile_map_position,
 
     PlayerIndexForController: [u32; 5], //GameInput::default().controllers.len() IS THE LENGTH, DOUBLE CHECK TO MATCH
-    EntityCount: u32,
-    Entities: [entity; 256],
+
+    LowEntityCount: u32,
+    LowEntities: [low_entity; 4096],
+
+    HighEntityCount: u32,
+    HighEntities_: [high_entity; 256],
 
     Backdrop: loaded_bitmap,
+    Shadow: loaded_bitmap,
     HeroBitmaps: [hero_bitmaps; 4],
 }
 
@@ -281,13 +318,14 @@ fn DrawBitmap(
     mut RealY: f32,
     AlignX: i32,
     AlignY: i32,
+    CAlpha: f32,
 ) {
     RealX -= AlignX as f32;
     RealY -= AlignY as f32;
     let mut MinX = RoundReal32ToInt32(RealX);
     let mut MinY = RoundReal32ToInt32(RealY);
-    let mut MaxX = RoundReal32ToInt32(RealX + Bitmap.Width as f32);
-    let mut MaxY = RoundReal32ToInt32(RealY + Bitmap.Height as f32);
+    let mut MaxX = MinX + Bitmap.Width;
+    let mut MaxY = MinY + Bitmap.Height;
 
     let mut SourceOffsetX = 0;
     if MinX < 0 {
@@ -336,7 +374,9 @@ fn DrawBitmap(
             X < MaxX;
             ++X) */
             {
-                let A = ((*Source >> 24) & 0xFF) as f32 / 255.0;
+                let mut A = ((*Source >> 24) & 0xFF) as f32 / 255.0;
+                A *= CAlpha;
+
                 let SR = ((*Source >> 16) & 0xFF) as f32;
                 let SG = ((*Source >> 8) & 0xFF) as f32;
                 let SB = ((*Source >> 0) & 0xFF) as f32;
@@ -437,46 +477,163 @@ fn GetController(Input: &mut GameInput, controller_index: u32) -> &mut GameContr
     return result;
 }
 
-fn GetEntity<'a>(GameState: &'a mut GameState, Index: u32) -> Option<&'a mut entity> {
+fn GetLowEntity<'a>(GameState: &'a mut GameState, Index: u32) -> Option<&'a mut low_entity> {
     let mut Entity = None;
-
-    if (Index > 0) && (Index < (GameState.Entities.len()).try_into().unwrap()) {
-        Entity = Some(&mut GameState.Entities[usize::try_from(Index).unwrap()]);
+    if (Index > 0) && (Index < (GameState.LowEntityCount)) {
+        Entity = Some(&mut GameState.LowEntities[usize::try_from(Index).unwrap()]);
     }
 
     return Entity;
 }
-fn InitializePlayer(GameState: &mut GameState, EntityIndex: u32) {
-    let Entity = GetEntity(GameState, EntityIndex);
 
-    match Entity {
-        Some(Entity) => {
-            Entity.Exists = true;
-            Entity.P.AbsTileX = 1;
-            Entity.P.AbsTileY = 3;
-            Entity.P.Offset_.X = 0.0;
-            Entity.P.Offset_.Y = 0.0;
-            Entity.Height = 0.5; //1.4
-            Entity.Width = 1.0;
+//MAY BE BUGGED??
+// CHANGE TO USE RAW POINTERS? BECAUSE OF POINTER ARITHMETIC. GOING TO TRY USING REGULAR INDEXING INTO ARRAY ATM
+fn MakeEntityHighFrequency<'a>(
+    GameState: &'a mut GameState,
+    LowIndex: u32,
+) -> Option<&'a mut high_entity> {
+    let mut EntityHigh = None;
+
+    let mut EntityLow = &mut GameState.LowEntities[LowIndex as usize];
+    if EntityLow.HighEntityIndex != 0 {
+        EntityHigh = Some(&mut GameState.HighEntities_[EntityLow.HighEntityIndex as usize]);
+    } else {
+        if GameState.HighEntityCount < (GameState.HighEntities_.len()).try_into().unwrap() {
+            let HighIndex = GameState.HighEntityCount;
+            GameState.HighEntityCount += 1;
+            let Diff = Subtract(
+                GameState.world.as_ref().unwrap().TileMap.as_ref().unwrap(),
+                &EntityLow.P,
+                &GameState.CameraP,
+            );
+            EntityLow.HighEntityIndex = HighIndex;
+
+            let mut temp = &mut GameState.HighEntities_[HighIndex as usize];
+            temp.P = Diff.dXY;
+            temp.dP = v2::default();
+            temp.AbsTileZ = EntityLow.P.AbsTileZ;
+            temp.FacingDirection = 0;
+            temp.LowEntityIndex = LowIndex;
+
+            EntityHigh = Some(temp);
+        } else {
+            panic!();
         }
-        None => {}
     }
 
-    //if(!GetEntity(GameState, GameState->CameraFollowingEntityIndex)) c++ version
-    if GetEntity(GameState, GameState.CameraFollowingEntityIndex).is_none() {
-        GameState.CameraFollowingEntityIndex = EntityIndex;
+    return EntityHigh;
+}
+
+//might not be 'a , because its a reference to an array on the gamestate struct itself!
+fn GetHighEntity<'a>(GameState: &'a mut GameState, LowIndex: u32) -> entity<'a> {
+    let mut result = entity::default();
+
+    if (LowIndex > 0) && (LowIndex < GameState.LowEntityCount) {
+        result.LowIndex = LowIndex;
+
+        unsafe {
+            let GameState = GameState as *mut GameState;
+            result.High = MakeEntityHighFrequency(&mut *GameState, LowIndex);
+        }
+        result.Low = Some(&mut GameState.LowEntities[LowIndex as usize]);
+    }
+    return result;
+}
+
+fn MakeEntityLowFrequency(GameState: &mut GameState, LowIndex: u32) {
+    let EntityLow = &mut GameState.LowEntities[LowIndex as usize];
+    let HighIndex = EntityLow.HighEntityIndex;
+    if HighIndex != 0 {
+        let LastHighIndex = GameState.HighEntityCount - 1;
+        if HighIndex != LastHighIndex {
+            let high_entities = &mut GameState.HighEntities_;
+
+            let LastEntity = &mut high_entities[LastHighIndex as usize];
+            GameState.LowEntities[LastEntity.LowEntityIndex as usize].HighEntityIndex = HighIndex;
+
+            let stored_last_entity = *LastEntity; //borrowing issues
+
+            let high_entities = &mut GameState.HighEntities_;
+            let DelEntity = &mut high_entities[HighIndex as usize];
+
+            *DelEntity = stored_last_entity;
+        }
+        GameState.HighEntityCount -= 1;
+        let EntityLow = &mut GameState.LowEntities[LowIndex as usize];
+        EntityLow.HighEntityIndex = 0;
     }
 }
 
-fn AddEntity(GameState: &mut GameState) -> u32 {
-    GameState.EntityCount += 1;
-    let EntityIndex = GameState.EntityCount;
+fn OffsetAndCheckFrequencyByArea(GameState: &mut GameState, Offset: v2, CameraBounds: rectangle2) {
+    let mut EntityIndex = 1;
+    while EntityIndex < GameState.HighEntityCount {
+        let High = &mut GameState.HighEntities_[EntityIndex as usize];
+        let LowEntityIndex = High.LowEntityIndex; // borrowing issues
 
-    let Entity = &mut GameState.Entities[usize::try_from(EntityIndex).unwrap()];
-    *Entity = entity::default();
+        High.P += Offset;
+        if IsInRectangle(CameraBounds, High.P) {
+            EntityIndex += 1;
+        } else {
+            MakeEntityLowFrequency(GameState, LowEntityIndex);
+        }
+    }
+}
+fn AddLowEntity(GameState: &mut GameState, Type: entity_type) -> u32 {
+    let EntityIndex = GameState.LowEntityCount;
+    GameState.LowEntityCount += 1;
+    GameState.LowEntities[EntityIndex as usize] = low_entity {
+        Type: Type,
+        P: tile_map_position::default(),
+        Width: 0.0,
+        Height: 0.0,
+        Collides: false,
+        dAbsTileZ: 0,
+
+        HighEntityIndex: 0,
+    };
+    //dbg!(GameState.LowEntities[EntityIndex as usize]);
+    return EntityIndex;
+}
+
+fn AddWall(GameState: &mut GameState, AbsTileX: u32, AbsTileY: u32, AbsTileZ: u32) -> u32 {
+    let EntityIndex = AddLowEntity(GameState, entity_type::EntityType_Wall);
+    let height = GameState
+        .world
+        .as_ref()
+        .unwrap()
+        .TileMap
+        .as_ref()
+        .unwrap()
+        .TileSideInMeters;
+    let EntityLow = GetLowEntity(GameState, EntityIndex).unwrap();
+    EntityLow.P.AbsTileX = AbsTileX;
+    EntityLow.P.AbsTileY = AbsTileY;
+    EntityLow.P.AbsTileZ = AbsTileZ;
+    EntityLow.Height = height; //have to move up, borrowing issues
+    EntityLow.Width = EntityLow.Height;
+    EntityLow.Collides = true;
 
     return EntityIndex;
 }
+
+fn AddPlayer(GameState: &mut GameState) -> u32 {
+    let EntityIndex = AddLowEntity(GameState, entity_type::EntityType_Hero);
+    let EntityLow = GetLowEntity(GameState, EntityIndex).unwrap();
+    EntityLow.P.AbsTileX = 1;
+    EntityLow.P.AbsTileY = 3;
+    EntityLow.P.Offset_.X = 0.0;
+    EntityLow.P.Offset_.Y = 0.0;
+    EntityLow.Height = 0.5; // 1.4f;
+    EntityLow.Width = 1.0;
+    EntityLow.Collides = true;
+
+    if GameState.CameraFollowingEntityIndex == 0 {
+        GameState.CameraFollowingEntityIndex = EntityIndex;
+    }
+
+    return EntityIndex;
+}
+
 fn TestWall(
     WallX: f32,
     RelX: f32,
@@ -488,7 +645,7 @@ fn TestWall(
     MaxY: f32,
 ) -> bool {
     let mut hit = false;
-    let tEpsilon = 0.00001;
+    let tEpsilon = 0.001;
     if PlayerDeltaX != 0.0 {
         let tResult = (WallX - RelX) / PlayerDeltaX;
         let Y = RelY + tResult * PlayerDeltaY;
@@ -503,7 +660,7 @@ fn TestWall(
 }
 
 //original takes gamestate opposed to tilemap but should probably pass in tilemap if it doesn't utilzie the gamestate struct fields
-fn MovePlayer(GameState: &mut GameState, Entity: &mut entity, dt: f32, mut ddP: v2) {
+fn MovePlayer(GameState: &mut GameState, Entity: entity, dt: f32, mut ddP: v2) {
     let TileMap = GameState.world.as_mut().unwrap().TileMap.as_mut().unwrap();
 
     let ddPLength = LengthSq(ddP);
@@ -515,56 +672,8 @@ fn MovePlayer(GameState: &mut GameState, Entity: &mut entity, dt: f32, mut ddP: 
     ddP *= PlayerSpeed;
 
     // TODO(casey): ODE here!
-    ddP += -8.0 * Entity.dP;
 
-    let OldPlayerP = Entity.P;
-    let mut PlayerDelta = 0.5 * ddP * Square(dt) + Entity.dP * dt;
-    Entity.dP = ddP * dt + Entity.dP;
-    let NewPlayerP = Offset(TileMap, OldPlayerP, PlayerDelta);
-    // TODO(casey): Delta function that auto-recanonicalizes
-    /*
-    let mut PlayerLeft = NewPlayerP;
-    PlayerLeft.Offset._X -= 0.5 * Entity.Width;
-    PlayerLeft = RecanonicalizePosition(TileMap, PlayerLeft);
-    let mut PlayerRight = NewPlayerP;
-    PlayerRight.Offset._X += 0.5 * Entity.Width;
-    PlayerRight = RecanonicalizePosition(TileMap, PlayerRight);
-
-    let mut Collided = false;
-    let mut ColP = tile_map_position::default();
-    if !IsTileMapPointEmpty(TileMap, NewPlayerP) {
-        ColP = NewPlayerP;
-        Collided = true;
-    }
-    if !IsTileMapPointEmpty(TileMap, PlayerLeft) {
-        ColP = PlayerLeft;
-        Collided = true;
-    }
-    if !IsTileMapPointEmpty(TileMap, PlayerRight) {
-        ColP = PlayerRight;
-        Collided = true;
-    }
-
-    if Collided {
-        let mut r = v2::default();
-        if ColP.AbsTileX < Entity.P.AbsTileX {
-            r = v2 { X: 1.0, Y: 0.0 };
-        }
-        if ColP.AbsTileX > Entity.P.AbsTileX {
-            r = v2 { X: -1.0, Y: 0.0 };
-        }
-        if ColP.AbsTileY < Entity.P.AbsTileY {
-            r = v2 { X: 0.0, Y: 1.0 };
-        }
-        if ColP.AbsTileY > Entity.P.AbsTileY {
-            r = v2 { X: 0.0, Y: -1.0 };
-        }
-
-        Entity.dP = Entity.dP - 1.0 * Inner(Entity.dP, r) * r;
-    } else {
-        Entity.P = NewPlayerP;
-    } */
-    let mut MinTileX = Minimum(OldPlayerP.AbsTileX, NewPlayerP.AbsTileX);
+    /* let mut MinTileX = Minimum(OldPlayerP.AbsTileX, NewPlayerP.AbsTileX);
     let mut MinTileY = Minimum(OldPlayerP.AbsTileY, NewPlayerP.AbsTileY);
     let mut MaxTileX = Maximum(OldPlayerP.AbsTileX, NewPlayerP.AbsTileX);
     let mut MaxTileY = Maximum(OldPlayerP.AbsTileY, NewPlayerP.AbsTileY);
@@ -577,119 +686,201 @@ fn MovePlayer(GameState: &mut GameState, Entity: &mut entity, dt: f32, mut ddP: 
     MaxTileX += EntityTileWidth;
     MaxTileY += EntityTileHeight;
 
-    let AbsTileZ = Entity.P.AbsTileZ;
-    let mut tRemaining = 1.0;
-    let mut iteration = 0;
-    while iteration < 4 && tRemaining > 0.0 {
-        let mut tMin = 1.0;
-        let mut WallNormal = v2::default();
-        for AbsTileY in MinTileY..=MaxTileY {
-            for AbsTileX in MinTileX..=MaxTileX {
-                let TestTileP = CenteredTilePoint(AbsTileX, AbsTileY, AbsTileZ);
-                let TileValue = GetTileValue_P(TileMap, TestTileP);
-                if !IsTileValueEmpty(TileValue) {
-                    let DiameterW = TileMap.TileSideInMeters + Entity.Width;
-                    let DiameterH = TileMap.TileSideInMeters + Entity.Height;
-                    let MinCorner = -0.5
-                        * v2 {
-                            X: DiameterW,
-                            Y: DiameterH,
-                        };
-                    let MaxCorner = 0.5
-                        * v2 {
-                            X: DiameterW,
-                            Y: DiameterH,
-                        };
+    let AbsTileZ = Entity.P.AbsTileZ; */
 
-                    let RelOldPlayerP = Subtract(TileMap, &Entity.P, &TestTileP);
-                    let Rel = RelOldPlayerP.dXY;
+    match Entity {
+        entity {
+            LowIndex,
+            Low: Some(EntityLow),
+            High: Some(EntityHigh),
+        } => {
+            ddP += -8.0 * EntityHigh.dP;
+            let OldPlayerP = EntityHigh.P;
+            let mut PlayerDelta = 0.5 * ddP * Square(dt) + EntityHigh.dP * dt;
+            EntityHigh.dP = ddP * dt + EntityHigh.dP;
+            let NewPlayerP = OldPlayerP + PlayerDelta;
 
-                    if TestWall(
-                        MinCorner.X,
-                        Rel.X,
-                        Rel.Y,
-                        PlayerDelta.X,
-                        PlayerDelta.Y,
-                        &mut tMin,
-                        MinCorner.Y,
-                        MaxCorner.Y,
-                    ) {
-                        WallNormal = v2 { X: -1.0, Y: 0.0 };
+            let mut iteration = 0;
+            while iteration < 4 {
+                let mut tMin = 1.0;
+                let mut WallNormal = v2::default();
+                let mut HitHighEntityIndex = 0;
+
+                let DesiredPosition = EntityHigh.P + PlayerDelta;
+                let mut TestHighEntityIndex = 1;
+                while TestHighEntityIndex < GameState.HighEntityCount {
+                    if TestHighEntityIndex != EntityLow.HighEntityIndex
+                    //destructor struct instead of single option
+                    {
+                        let mut TestEntity = entity::default();
+
+                        TestEntity.High =
+                            Some(&mut GameState.HighEntities_[TestHighEntityIndex as usize]);
+                        TestEntity.LowIndex = TestEntity.High.as_ref().unwrap().LowEntityIndex;
+                        TestEntity.Low =
+                            Some(&mut GameState.LowEntities[TestEntity.LowIndex as usize]);
+
+                        if let Some(TestEntityLow) = TestEntity.Low {
+                            if TestEntityLow.Collides {
+                                let DiameterW = TestEntityLow.Width + EntityLow.Width;
+                                let DiameterH = TestEntityLow.Height + EntityLow.Height;
+
+                                let MinCorner = -0.5
+                                    * v2 {
+                                        X: DiameterW,
+                                        Y: DiameterH,
+                                    };
+                                let MaxCorner = 0.5
+                                    * v2 {
+                                        X: DiameterW,
+                                        Y: DiameterH,
+                                    };
+
+                                let Rel = EntityHigh.P - TestEntity.High.as_ref().unwrap().P;
+
+                                if TestWall(
+                                    MinCorner.X,
+                                    Rel.X,
+                                    Rel.Y,
+                                    PlayerDelta.X,
+                                    PlayerDelta.Y,
+                                    &mut tMin,
+                                    MinCorner.Y,
+                                    MaxCorner.Y,
+                                ) {
+                                    WallNormal = v2 { X: -1.0, Y: 0.0 };
+                                    HitHighEntityIndex = TestHighEntityIndex;
+                                }
+
+                                if TestWall(
+                                    MaxCorner.X,
+                                    Rel.X,
+                                    Rel.Y,
+                                    PlayerDelta.X,
+                                    PlayerDelta.Y,
+                                    &mut tMin,
+                                    MinCorner.Y,
+                                    MaxCorner.Y,
+                                ) {
+                                    WallNormal = v2 { X: 1.0, Y: 0.0 };
+                                    HitHighEntityIndex = TestHighEntityIndex;
+                                }
+
+                                if TestWall(
+                                    MinCorner.Y,
+                                    Rel.Y,
+                                    Rel.X,
+                                    PlayerDelta.Y,
+                                    PlayerDelta.X,
+                                    &mut tMin,
+                                    MinCorner.X,
+                                    MaxCorner.X,
+                                ) {
+                                    WallNormal = v2 { X: 0.0, Y: -1.0 };
+                                    HitHighEntityIndex = TestHighEntityIndex;
+                                }
+
+                                if TestWall(
+                                    MaxCorner.Y,
+                                    Rel.Y,
+                                    Rel.X,
+                                    PlayerDelta.Y,
+                                    PlayerDelta.X,
+                                    &mut tMin,
+                                    MinCorner.X,
+                                    MaxCorner.X,
+                                ) {
+                                    WallNormal = v2 { X: 0.0, Y: 1.0 };
+                                    HitHighEntityIndex = TestHighEntityIndex;
+                                }
+                            }
+                        }
                     }
-                    if TestWall(
-                        MaxCorner.X,
-                        Rel.X,
-                        Rel.Y,
-                        PlayerDelta.X,
-                        PlayerDelta.Y,
-                        &mut tMin,
-                        MinCorner.Y,
-                        MaxCorner.Y,
-                    ) {
-                        WallNormal = v2 { X: 1.0, Y: 0.0 };
-                    }
-                    if TestWall(
-                        MinCorner.Y,
-                        Rel.Y,
-                        Rel.X,
-                        PlayerDelta.Y,
-                        PlayerDelta.X,
-                        &mut tMin,
-                        MinCorner.X,
-                        MaxCorner.X,
-                    ) {
-                        WallNormal = v2 { X: 0.0, Y: -1.0 };
-                    }
-                    if TestWall(
-                        MaxCorner.Y,
-                        Rel.Y,
-                        Rel.X,
-                        PlayerDelta.Y,
-                        PlayerDelta.X,
-                        &mut tMin,
-                        MinCorner.X,
-                        MaxCorner.X,
-                    ) {
-                        WallNormal = v2 { X: 0.0, Y: 1.0 };
-                    }
+                    TestHighEntityIndex += 1;
+                }
+
+                EntityHigh.P += tMin * PlayerDelta;
+                if HitHighEntityIndex != 0 {
+                    EntityHigh.dP =
+                        EntityHigh.dP - 1.0 * Inner(EntityHigh.dP, WallNormal) * WallNormal;
+                    PlayerDelta = DesiredPosition - EntityHigh.P;
+                    PlayerDelta = PlayerDelta - 1.0 * Inner(PlayerDelta, WallNormal) * WallNormal;
+
+                    let HitHigh = &GameState.HighEntities_[HitHighEntityIndex as usize];
+                    let HitLow = &GameState.LowEntities[HitHigh.LowEntityIndex as usize];
+                    EntityHigh.AbsTileZ += HitLow.dAbsTileZ as u32; //MIGHT BE WRONG DEFAULT CONVERSION?
+                } else {
+                    break;
+                }
+                iteration += 1;
+            }
+
+            // TODO(casey): Change to using the acceleration vector
+            if (EntityHigh.dP.X == 0.0) && (EntityHigh.dP.Y == 0.0) {
+                // NOTE(casey): Leave FacingDirection whatever it was
+            } else if (EntityHigh.dP.X).abs() > (EntityHigh.dP.Y).abs() {
+                if EntityHigh.dP.X > 0.0 {
+                    EntityHigh.FacingDirection = 0;
+                } else {
+                    EntityHigh.FacingDirection = 2;
+                }
+            } else {
+                if EntityHigh.dP.Y > 0.0 {
+                    EntityHigh.FacingDirection = 1;
+                } else {
+                    EntityHigh.FacingDirection = 3;
                 }
             }
+
+            EntityLow.P = MapIntoTileSpace(
+                GameState.world.as_mut().unwrap().TileMap.as_mut().unwrap(),
+                GameState.CameraP,
+                EntityHigh.P,
+            );
         }
-        Entity.P = Offset(TileMap, Entity.P, tMin * PlayerDelta);
-        Entity.dP = Entity.dP - 1.0 * Inner(Entity.dP, WallNormal) * WallNormal;
-        PlayerDelta = PlayerDelta - 1.0 * Inner(PlayerDelta, WallNormal) * WallNormal;
-        tRemaining -= tMin * tRemaining;
-        iteration += 1;
+        _ => {}
     }
+}
 
-    //
-    // NOTE(casey): Update camera/player Z based on last movement.
-    //
-    if !AreOnSameTile(&OldPlayerP, &Entity.P) {
-        //TODO: MAKE TILEMAP NOT TAKE IN RAW POINTER
-        let NewTileValue = GetTileValue_P(TileMap, Entity.P);
+fn SetCamera(GameState: &mut GameState, NewCameraP: tile_map_position) {
+    let TileMap = GameState.world.as_mut().unwrap().TileMap.as_mut().unwrap();
 
-        if NewTileValue == 3 {
-            Entity.P.AbsTileZ += 1;
-        } else if NewTileValue == 4 {
-            Entity.P.AbsTileZ -= 1;
-        }
-    }
+    let dCameraP = Subtract(TileMap, &NewCameraP, &GameState.CameraP);
+    GameState.CameraP = NewCameraP;
 
-    if (Entity.dP.X == 0.0) && (Entity.dP.Y == 0.0) {
-        // NOTE(casey): Leave FacingDirection whatever it was
-    } else if Entity.dP.X.abs() > Entity.dP.Y.abs() {
-        if Entity.dP.X > 0.0 {
-            Entity.FacingDirection = 0;
-        } else {
-            Entity.FacingDirection = 2;
+    // TODO(casey): I am totally picking these numbers randomly!
+    let TileSpanX = 17 * 3;
+    let TileSpanY = 9 * 3;
+    let CameraBounds = RectCenterDim(
+        v2::default(),
+        TileMap.TileSideInMeters
+            * v2 {
+                X: TileSpanX as f32,
+                Y: TileSpanY as f32,
+            },
+    );
+    let EntityOffsetForFrame = -dCameraP.dXY;
+    OffsetAndCheckFrequencyByArea(GameState, EntityOffsetForFrame, CameraBounds);
+
+    let MinTileX = NewCameraP.AbsTileX - TileSpanX / 2;
+    let MaxTileX = NewCameraP.AbsTileX + TileSpanX / 2;
+    let MinTileY = NewCameraP.AbsTileY - TileSpanY / 2;
+    let MaxTileY = NewCameraP.AbsTileY + TileSpanY / 2;
+
+    let mut EntityIndex = 1;
+    while EntityIndex < GameState.LowEntityCount {
+        let Low = &mut GameState.LowEntities[EntityIndex as usize];
+        if Low.HighEntityIndex == 0 {
+            if (Low.P.AbsTileZ == NewCameraP.AbsTileZ)
+                && (Low.P.AbsTileX >= MinTileX)
+                && (Low.P.AbsTileX <= MaxTileX)
+                && (Low.P.AbsTileY <= MinTileY)
+                && (Low.P.AbsTileY >= MaxTileY)
+            {
+                MakeEntityHighFrequency(GameState, EntityIndex);
+            }
         }
-    } else {
-        if Entity.dP.Y > 0.0 {
-            Entity.FacingDirection = 1;
-        } else {
-            Entity.FacingDirection = 3;
-        }
+        EntityIndex += 1;
     }
 }
 
@@ -708,12 +899,19 @@ pub extern "C" fn game_update_and_render(
             let mut game_state = &mut *(memory.permanent_storage as *mut GameState);
 
             //reserved for null entity
-            AddEntity(game_state);
+            AddLowEntity(game_state, entity_type::EntityType_Null);
+            game_state.HighEntityCount = 1;
 
             game_state.Backdrop = DEBUGLoadBMP(
                 thread,
                 memory.debug_platform_read_entire_file,
                 "test/test_background.bmp",
+            );
+
+            game_state.Shadow = DEBUGLoadBMP(
+                thread,
+                memory.debug_platform_read_entire_file,
+                "test/test_hero_shadow.bmp",
             );
             let mut Bitmap = &mut game_state.HeroBitmaps[0];
             Bitmap.Head = DEBUGLoadBMP(
@@ -791,9 +989,6 @@ pub extern "C" fn game_update_and_render(
             Bitmap.AlignX = 72;
             Bitmap.AlignY = 182;
 
-            game_state.CameraP.AbsTileX = 17 / 2;
-            game_state.CameraP.AbsTileY = 9 / 2;
-
             // TILEMAP INITIALIZATION HERE
             {
                 let mut game_state = &mut *(memory.permanent_storage as *mut GameState);
@@ -823,8 +1018,8 @@ pub extern "C" fn game_update_and_render(
                 TileMap.TileSideInMeters = 1.4;
 
                 {
-                    let mut game_state = &mut *(memory.permanent_storage as *mut GameState);
-                    let World = game_state.world.as_mut().unwrap();
+                    let game_state = &mut *(memory.permanent_storage as *mut GameState);
+                    //let World = game_state.world.as_mut().unwrap();
                     let world_arena = &mut game_state.WorldArena;
                     TileMap.TileChunks = &mut *PushArray::<tile_chunk>(
                         world_arena,
@@ -851,7 +1046,7 @@ pub extern "C" fn game_update_and_render(
             let mut DoorBottom = false;
             let mut DoorUp = false;
             let mut DoorDown = false;
-            for ScreenIndex in 0..100
+            for ScreenIndex in 0..2
             /*    (uint32 ScreenIndex = 0;
             ScreenIndex < 100;
             ++ScreenIndex) */
@@ -863,11 +1058,11 @@ pub extern "C" fn game_update_and_render(
                 if DoorUp || DoorDown {
                     RandomNumberIndex += 1;
                     RandomChoice = RandomNumberTable[RandomNumberIndex] % 2;
-                } else {
-                    RandomNumberIndex += 1;
-                    RandomChoice = RandomNumberTable[RandomNumberIndex] % 3;
-                }
-
+                } /*  else {
+                                     RandomNumberIndex += 1;
+                                     RandomChoice = RandomNumberTable[RandomNumberIndex] % 3;
+                                 }
+                  */
                 let mut createdZDoor = false;
                 if RandomChoice == 2 {
                     createdZDoor = true;
@@ -937,6 +1132,10 @@ pub extern "C" fn game_update_and_render(
                             AbsTileZ,
                             TileValue,
                         );
+
+                        if TileValue == 2 {
+                            AddWall(game_state, AbsTileX, AbsTileY, AbsTileZ);
+                        }
                     }
                 }
 
@@ -966,6 +1165,13 @@ pub extern "C" fn game_update_and_render(
                     ScreenY += 1;
                 }
             }
+
+            let mut NewCameraP = tile_map_position::default();
+            NewCameraP.AbsTileX = 17 / 2;
+            NewCameraP.AbsTileY = 9 / 2;
+            let game_state = &mut *(memory.permanent_storage as *mut GameState);
+            SetCamera(game_state, NewCameraP);
+
             memory.is_initalized = true as bool32;
         }
 
@@ -980,79 +1186,120 @@ pub extern "C" fn game_update_and_render(
         let LowerLeftY = buffer.height as f32;
 
         for controller_index in 0..input.controllers.len() {
-            let game_state = &mut *(memory.permanent_storage as *mut GameState);
             let controller = GetController(input, controller_index.try_into().unwrap());
-            let ControllingEntity = GetEntity(
-                game_state,
-                game_state.PlayerIndexForController[controller_index],
-            );
+            let game_state = &mut *(memory.permanent_storage as *mut GameState);
+            let LowIndex = game_state.PlayerIndexForController[controller_index as usize];
 
-            match ControllingEntity {
-                Some(controlling_entity) => {
-                    let mut ddP = v2::default();
+            if LowIndex == 0 {
+                if controller.start().ended_down != 0 {
+                    let EntityIndex = AddPlayer(game_state);
+                    game_state.PlayerIndexForController[controller_index as usize] = EntityIndex;
+                }
+            } else {
+                let mut ControllingEntity = GetHighEntity(game_state, LowIndex);
 
-                    if controller.is_analog != 0 {
-                        ddP = v2 {
-                            X: controller.stick_average_x,
-                            Y: controller.stick_average_y,
-                        }
-                    } else {
-                        // NOTE(casey): Use digital movement tuning
-                        if controller.move_up().ended_down != 0 {
-                            ddP.Y = 1.0;
-                        }
-                        if controller.move_down().ended_down != 0 {
-                            ddP.Y = -1.0;
-                        }
-                        if controller.move_left().ended_down != 0 {
-                            ddP.X = -1.0;
-                        }
-                        if controller.move_right().ended_down != 0 {
-                            ddP.X = 1.0;
-                        }
+                let mut ddP = v2::default();
+
+                if controller.is_analog != 0 {
+                    ddP = v2 {
+                        X: controller.stick_average_x,
+                        Y: controller.stick_average_y,
                     }
-                    {
-                        let game_state = &mut *(memory.permanent_storage as *mut GameState);
-                        MovePlayer(game_state, controlling_entity, input.dtForFrame, ddP);
+                } else {
+                    // NOTE(casey): Use digital movement tuning
+                    if controller.move_up().ended_down != 0 {
+                        ddP.Y = 1.0;
+                    }
+                    if controller.move_down().ended_down != 0 {
+                        ddP.Y = -1.0;
+                    }
+                    if controller.move_left().ended_down != 0 {
+                        ddP.X = -1.0;
+                    }
+                    if controller.move_right().ended_down != 0 {
+                        ddP.X = 1.0;
                     }
                 }
-                None => {
-                    if controller.start().ended_down != 0 {
-                        let EntityIndex = AddEntity(game_state);
-                        InitializePlayer(game_state, EntityIndex);
-                        game_state.PlayerIndexForController[controller_index] = EntityIndex;
-                    }
+                //BEFORE
+                if controller.action_up().ended_down != 0 {
+                    ControllingEntity.High.as_mut().unwrap().dZ = 3.0;
+                }
+
+                {
+                    let game_state = &mut *(memory.permanent_storage as *mut GameState);
+
+                    //LOOP MOVED INTO HERE? error :use of moved value: `ControllingEntity`
+                    MovePlayer(game_state, ControllingEntity, input.dtForFrame, ddP);
                 }
             }
         }
 
         let game_state = &mut *(memory.permanent_storage as *mut GameState);
-        let CameraFollowingEntity = GetEntity(game_state, game_state.CameraFollowingEntityIndex);
+        let EntityOffsetForFrame = v2::default();
+        let CameraFollowingEntity =
+            GetHighEntity(game_state, game_state.CameraFollowingEntityIndex);
 
-        if let Some(CameraFollowingEntity) = CameraFollowingEntity {
-            let game_state = &mut *(memory.permanent_storage as *mut GameState);
-            game_state.CameraP.AbsTileZ = CameraFollowingEntity.P.AbsTileZ;
+        if CameraFollowingEntity.High.is_some() {
+            match CameraFollowingEntity {
+                entity {
+                    LowIndex: _,
+                    Low: Some(Low),
+                    High: Some(High),
+                } => {
+                    let game_state = &mut *(memory.permanent_storage as *mut GameState);
+                    let mut NewCameraP = game_state.CameraP;
 
-            let Diff = Subtract(TileMap, &CameraFollowingEntity.P, &game_state.CameraP);
-            if Diff.dXY.X > (9.0 * TileMap.TileSideInMeters) {
-                game_state.CameraP.AbsTileX += 17;
+                    NewCameraP.AbsTileZ = Low.P.AbsTileZ;
+
+                    if High.P.X > (9.0 * TileMap.TileSideInMeters) {
+                        NewCameraP.AbsTileX += 17;
+                    }
+                    if High.P.X < -(9.0 * TileMap.TileSideInMeters) {
+                        NewCameraP.AbsTileX -= 17;
+                    }
+                    if High.P.Y > (5.0 * TileMap.TileSideInMeters) {
+                        NewCameraP.AbsTileY += 9;
+                    }
+                    if High.P.Y < -(5.0 * TileMap.TileSideInMeters) {
+                        NewCameraP.AbsTileY -= 9;
+                    }
+
+                    SetCamera(game_state, NewCameraP);
+                }
+                _ => {}
             }
-            if Diff.dXY.X < -(9.0 * TileMap.TileSideInMeters) {
-                game_state.CameraP.AbsTileX -= 17;
-            }
-            if Diff.dXY.Y > (5.0 * TileMap.TileSideInMeters) {
-                game_state.CameraP.AbsTileY += 9;
-            }
-            if Diff.dXY.Y < -(5.0 * TileMap.TileSideInMeters) {
-                game_state.CameraP.AbsTileY -= 9;
-            }
+            /* #else
+                    if(CameraFollowingEntity.High.P.X > (1.0f*TileMap.TileSideInMeters))
+                    {
+                        NewCameraP.AbsTileX += 1;
+                    }
+                    if(CameraFollowingEntity.High.P.X < -(1.0f*TileMap.TileSideInMeters))
+                    {
+                        NewCameraP.AbsTileX -= 1;
+                    }
+                    if(CameraFollowingEntity.High.P.Y > (1.0f*TileMap.TileSideInMeters))
+                    {
+                        NewCameraP.AbsTileY += 1;
+                    }
+                    if(CameraFollowingEntity.High.P.Y < -(1.0f*TileMap.TileSideInMeters))
+                    {
+                        NewCameraP.AbsTileY -= 1;
+                    }
+            #endif
+                     */
+            // TODO(casey): Map new entities in and old entities out!!!
+            // TODO(casey): Mapping tiles and stairs into the entity set!
         }
 
-        DrawBitmap(buffer, &game_state.Backdrop, 0.0, 0.0, 0, 0);
+        //
+        // NOTE(casey): Render
+        //
+        DrawBitmap(buffer, &game_state.Backdrop, 0.0, 0.0, 0, 0, 1.0);
+
         let ScreenCenterX = 0.5 * buffer.width as f32;
         let ScreenCenterY = 0.5 * buffer.height as f32;
 
-        for RelRow in -10..10
+        /*         for RelRow in -10..10
         /*     (int32 RelRow = -10;
         RelRow < 10;
         ++RelRow) */
@@ -1099,24 +1346,79 @@ pub extern "C" fn game_update_and_render(
                     DrawRectangle(buffer, Min, Max, Gray, Gray, Gray);
                 }
             }
-        }
+        } */
+        for HighEntityIndex in 1..game_state.HighEntityCount {
+            let mut HighEntity = &mut game_state.HighEntities_[HighEntityIndex as usize];
+            let LowEntity = &mut game_state.LowEntities[HighEntity.LowEntityIndex as usize];
 
-        for Entity in game_state.Entities.into_iter() {
-            if Entity.Exists {
-                let Diff = Subtract(TileMap, &Entity.P, &game_state.CameraP);
-                let PlayerR = 1.0;
-                let PlayerG = 1.0;
-                let PlayerB = 0.0;
-                let PlayerGroundPointX = ScreenCenterX + MetersToPixels * Diff.dXY.X;
-                let PlayerGroundPointY = ScreenCenterY - MetersToPixels * Diff.dXY.Y;
-                let PlayerLeftTop = v2 {
-                    X: PlayerGroundPointX - 0.5 * MetersToPixels * Entity.Width,
-                    Y: PlayerGroundPointY - -0.5 * MetersToPixels * Entity.Height,
-                };
-                let EntityWidthHeight = v2 {
-                    X: Entity.Width,
-                    Y: Entity.Height,
-                };
+            HighEntity.P += EntityOffsetForFrame;
+
+            let dt = input.dtForFrame;
+            let ddZ = -9.8;
+            HighEntity.Z = 0.5 * ddZ * Square(dt) + HighEntity.dZ * dt + HighEntity.Z;
+            HighEntity.dZ = ddZ * dt + HighEntity.dZ;
+            if HighEntity.Z < 0.0 {
+                HighEntity.Z = 0.0;
+            }
+            let mut CAlpha = 1.0 - 0.5 * HighEntity.Z;
+            if CAlpha < 0.0 {
+                CAlpha = 0.0;
+            }
+
+            let PlayerR = 1.0;
+            let PlayerG = 1.0;
+            let PlayerB = 0.0;
+            let PlayerGroundPointX = ScreenCenterX + MetersToPixels * HighEntity.P.X;
+            let PlayerGroundPointY = ScreenCenterY - MetersToPixels * HighEntity.P.Y;
+            let Z = -MetersToPixels * HighEntity.Z;
+            let PlayerLeftTop = v2 {
+                X: PlayerGroundPointX - 0.5 * MetersToPixels * LowEntity.Width,
+                Y: PlayerGroundPointY - 0.5 * MetersToPixels * LowEntity.Height,
+            };
+            let EntityWidthHeight = v2 {
+                X: LowEntity.Width,
+                Y: LowEntity.Height,
+            };
+
+            if let entity_type::EntityType_Hero = LowEntity.Type {
+                let HeroBitmaps = &game_state.HeroBitmaps[HighEntity.FacingDirection as usize];
+                DrawBitmap(
+                    buffer,
+                    &game_state.Shadow,
+                    PlayerGroundPointX,
+                    PlayerGroundPointY,
+                    HeroBitmaps.AlignX,
+                    HeroBitmaps.AlignY,
+                    CAlpha,
+                );
+                DrawBitmap(
+                    buffer,
+                    &HeroBitmaps.Torso,
+                    PlayerGroundPointX,
+                    PlayerGroundPointY + Z,
+                    HeroBitmaps.AlignX,
+                    HeroBitmaps.AlignY,
+                    1.0,
+                );
+                DrawBitmap(
+                    buffer,
+                    &HeroBitmaps.Cape,
+                    PlayerGroundPointX,
+                    PlayerGroundPointY + Z,
+                    HeroBitmaps.AlignX,
+                    HeroBitmaps.AlignY,
+                    1.0,
+                );
+                DrawBitmap(
+                    buffer,
+                    &HeroBitmaps.Head,
+                    PlayerGroundPointX,
+                    PlayerGroundPointY + Z,
+                    HeroBitmaps.AlignX,
+                    HeroBitmaps.AlignY,
+                    1.0,
+                );
+            } else {
                 DrawRectangle(
                     buffer,
                     PlayerLeftTop,
@@ -1125,47 +1427,13 @@ pub extern "C" fn game_update_and_render(
                     PlayerG,
                     PlayerB,
                 );
-
-                let HeroBitmaps = &game_state.HeroBitmaps[Entity.FacingDirection as usize];
-                DrawBitmap(
-                    buffer,
-                    &HeroBitmaps.Torso,
-                    PlayerGroundPointX,
-                    PlayerGroundPointY,
-                    HeroBitmaps.AlignX,
-                    HeroBitmaps.AlignY,
-                );
-                DrawBitmap(
-                    buffer,
-                    &HeroBitmaps.Cape,
-                    PlayerGroundPointX,
-                    PlayerGroundPointY,
-                    HeroBitmaps.AlignX,
-                    HeroBitmaps.AlignY,
-                );
-                DrawBitmap(
-                    buffer,
-                    &HeroBitmaps.Head,
-                    PlayerGroundPointX,
-                    PlayerGroundPointY,
-                    HeroBitmaps.AlignX,
-                    HeroBitmaps.AlignY,
-                );
             }
         }
     }
 }
 
-unsafe fn DrawRectangle(
-    Buffer: &mut GameOffScreenBuffer,
-    vMin: v2,
-    vMax: v2,
-    R: f32,
-    G: f32,
-    B: f32,
-) {
+fn DrawRectangle(Buffer: &mut GameOffScreenBuffer, vMin: v2, vMax: v2, R: f32, G: f32, B: f32) {
     // TODO(casey): Floating point color tomorrow!!!!!!
-
     let mut MinX = (vMin.X).round() as i32;
     let mut MinY = (vMin.Y).round() as i32;
     let mut MaxX = (vMax.X).round() as i32;
@@ -1190,23 +1458,25 @@ unsafe fn DrawRectangle(
     let Color = ((R * 255.0).round() as u32) << 16
         | ((G * 255.0).round() as u32) << 8
         | ((B * 255.0).round() as u32) << 0;
-    let mut Row = Buffer
-        .memory
-        .offset((MinX * Buffer.bytes_per_pixel + MinY * Buffer.pitch) as isize)
-        as *mut u8;
-    let mut y = MinY;
-    while y < MaxY {
-        y += 1;
-        let mut pixel = Row as *mut u32;
+    unsafe {
+        let mut Row = Buffer
+            .memory
+            .offset((MinX * Buffer.bytes_per_pixel + MinY * Buffer.pitch) as isize)
+            as *mut u8;
+        let mut y = MinY;
+        while y < MaxY {
+            y += 1;
+            let mut pixel = Row as *mut u32;
 
-        let mut x = MinX;
-        while x < MaxX {
-            x += 1;
+            let mut x = MinX;
+            while x < MaxX {
+                x += 1;
 
-            *pixel = Color;
-            pixel = pixel.offset(1);
+                *pixel = Color;
+                pixel = pixel.offset(1);
+            }
+            Row = Row.offset(Buffer.pitch.try_into().unwrap());
         }
-        Row = Row.offset(Buffer.pitch.try_into().unwrap());
     }
     /*   for(int Y = MinY;
         Y < MaxY;

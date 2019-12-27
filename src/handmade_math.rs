@@ -91,3 +91,50 @@ pub fn LengthSq(a: v2) -> f32 {
     let result = Inner(a, a);
     return result;
 }
+#[derive(Default, Copy, Clone)]
+pub struct rectangle2 {
+    Min: v2,
+    Max: v2,
+}
+
+pub fn RectMinMax(Min: v2, Max: v2) -> rectangle2 {
+    let mut result = rectangle2::default();
+
+    result.Min = Min;
+    result.Max = Max;
+
+    return result;
+}
+
+fn RectMinDim(Min: v2, Dim: v2) -> rectangle2 {
+    let mut result = rectangle2::default();
+
+    result.Min = Min;
+    result.Max = Min + Dim;
+
+    return result;
+}
+
+pub fn RectCenterHalfDim(Center: v2, HalfDim: v2) -> rectangle2 {
+    let mut result = rectangle2::default();
+
+    result.Min = Center - HalfDim;
+    result.Max = Center + HalfDim;
+
+    return result;
+}
+
+pub fn RectCenterDim(Center: v2, Dim: v2) -> rectangle2 {
+    let result = RectCenterHalfDim(Center, 0.5 * Dim);
+
+    return result;
+}
+
+pub fn IsInRectangle(Rectangle: rectangle2, Test: v2) -> bool {
+    let result = (Test.X >= Rectangle.Min.X)
+        && (Test.Y >= Rectangle.Min.Y)
+        && (Test.X < Rectangle.Max.X)
+        && (Test.Y < Rectangle.Max.Y);
+
+    return result;
+}

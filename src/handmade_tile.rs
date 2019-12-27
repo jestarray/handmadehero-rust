@@ -29,7 +29,7 @@ pub struct tile_chunk {
     // TODO(casey): Real structure for a tile!
     pub Tiles: *mut u32,
 }
-
+#[derive(Debug)]
 pub struct tile_map {
     pub ChunkShift: u32,
     pub ChunkMask: u32,
@@ -74,9 +74,13 @@ pub fn RecanonicalizeCoord(TileMap: &tile_map, Tile: &mut u32, TileRel: &mut f32
     //Assert(*TileRel <= 0.5f*TileMap.TileSideInMeters);
 }
 
-pub fn RecanonicalizePosition(TileMap: &tile_map, Pos: tile_map_position) -> tile_map_position {
-    let mut result = Pos;
-
+pub fn MapIntoTileSpace(
+    TileMap: &tile_map,
+    BasePos: tile_map_position,
+    Offset: v2,
+) -> tile_map_position {
+    let mut result = BasePos;
+    result.Offset_ += Offset;
     RecanonicalizeCoord(TileMap, &mut result.AbsTileX, &mut result.Offset_.X);
     RecanonicalizeCoord(TileMap, &mut result.AbsTileY, &mut result.Offset_.Y);
 
@@ -307,11 +311,4 @@ pub fn CenteredTilePoint(AbsTileX: u32, AbsTileY: u32, AbsTileZ: u32) -> tile_ma
     result.AbsTileZ = AbsTileZ;
 
     return result;
-}
-
-pub fn Offset(TileMap: &tile_map, mut P: tile_map_position, Offset: v2) -> tile_map_position {
-    P.Offset_ += Offset;
-    P = RecanonicalizePosition(TileMap, P);
-
-    return P;
 }
