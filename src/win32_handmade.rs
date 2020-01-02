@@ -1499,8 +1499,8 @@ pub unsafe extern "system" fn winmain() {
                 RUNNING = true; // TODO
                 let mut game_memory = GameMemory {
                     is_initalized: 0,
-                    permanent_storage_size: megabytes(64), //64mb ,
-                    transient_storage_size: gigabytes(1),  //1gb
+                    permanent_storage_size: megabytes(256), //64mb ,
+                    transient_storage_size: gigabytes(1),   //1gb
                     transient_storage: null_mut() as *mut std::ffi::c_void,
                     permanent_storage: null_mut() as *mut std::ffi::c_void,
                     debug_platform_free_file_memory,
@@ -1518,19 +1518,10 @@ pub unsafe extern "system" fn winmain() {
                 );
                 game_memory.permanent_storage = State.GameMemoryBlock as *mut std::ffi::c_void;
 
-                game_memory.permanent_storage = VirtualAlloc(
-                    null_mut(),
-                    game_memory.permanent_storage_size as usize,
-                    MEM_RESERVE | MEM_COMMIT,
-                    PAGE_READWRITE,
-                ) as *mut std::ffi::c_void;
-
-                game_memory.transient_storage = VirtualAlloc(
-                    null_mut(),
-                    game_memory.transient_storage_size as usize,
-                    MEM_RESERVE | MEM_COMMIT,
-                    PAGE_READWRITE,
-                ) as *mut std::ffi::c_void;
+                game_memory.transient_storage = game_memory
+                    .permanent_storage
+                    .offset(game_memory.permanent_storage_size.try_into().unwrap())
+                    as *mut std::ffi::c_void;
 
                 //TEST CODE
                 /*  {
@@ -1561,7 +1552,6 @@ pub unsafe extern "system" fn winmain() {
                 ReplayIndex < ArrayCount(Win32State.ReplayBuffers);
                 ++ReplayIndex) */
                 {
-                    ReplayIndex += 1;
                     //let ReplayBuffer = &mut State.ReplayBuffers[ReplayIndex];
 
                     // TODO(casey): Recording system still seems to take too long
@@ -1607,6 +1597,7 @@ pub unsafe extern "system" fn winmain() {
                     } else {
                         // TODO(casey): Diagnostic
                     }
+                    ReplayIndex += 1; //c-style for loops increment at the end
                 }
 
                 if samples != null_mut()
