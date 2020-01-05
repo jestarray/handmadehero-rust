@@ -91,6 +91,22 @@ pub fn LengthSq(a: v2) -> f32 {
     let result = Inner(a, a);
     return result;
 }
+
+pub fn GetMinCorner(Rect: rectangle2) -> v2 {
+    let result = Rect.Min;
+    return (result);
+}
+
+pub fn GetMaxCorner(Rect: rectangle2) -> v2 {
+    let result = Rect.Max;
+    return (result);
+}
+
+pub fn GetCenter(Rect: rectangle2) -> v2 {
+    let result = 0.5 * (Rect.Min + Rect.Max);
+    return (result);
+}
+
 #[derive(Default, Copy, Clone)]
 pub struct rectangle2 {
     Min: v2,

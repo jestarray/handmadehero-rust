@@ -841,7 +841,6 @@ unsafe fn win32_display_buffer_in_window(
     buffer: &Win32OffScreenBuffer,
 ) {
     if (window_width >= buffer.width * 2) && (window_height >= buffer.height * 2) {
-        dbg!("RUNNING");
         StretchDIBits(
             device_context,
             0,

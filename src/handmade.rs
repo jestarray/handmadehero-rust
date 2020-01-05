@@ -23,13 +23,13 @@ mod handmade_intrinsics;
 use core::mem::size_of;
 use handmade_intrinsics::*;
 use std::convert::TryFrom;
-mod handmade_tile;
-use handmade_tile::*;
 use std::{convert::TryInto, ffi::c_void, ptr::null_mut};
 mod handmade_random;
 use crate::handmade_random::RandomNumberTable;
 mod handmade_math;
 use crate::handmade_math::*;
+mod handmade_world;
+use crate::handmade_world::*;
 struct loaded_bitmap {
     Width: i32,
     Height: i32,
@@ -138,10 +138,6 @@ pub struct GameButtonState {
     pub half_transition_count: i32,
     pub ended_down: i32,
 }
-#[derive(Default, Debug)]
-struct world<'a> {
-    TileMap: Option<&'a mut tile_map>,
-}
 
 #[derive(Debug)]
 pub struct memory_arena {
@@ -164,7 +160,7 @@ impl Default for memory_arena {
 struct high_entity {
     P: v2, // NOTE(casey): Relative to the camera!
     dP: v2,
-    AbsTileZ: u32,
+    ChunkZ: u32,
     FacingDirection: u32,
 
     Z: f32,
@@ -183,7 +179,7 @@ enum entity_type {
 struct low_entity {
     Type: entity_type,
 
-    P: tile_map_position,
+    P: world_position,
     Width: f32,
     Height: f32,
     // NOTE(casey): This is for "stairs"
@@ -202,21 +198,22 @@ struct entity<'a> {
 
 pub struct GameState<'a> {
     WorldArena: memory_arena,
-    world: Option<&'a mut world<'a>>,
+    world: Option<&'a mut world>,
 
     CameraFollowingEntityIndex: u32,
-    CameraP: tile_map_position,
+    CameraP: world_position,
 
     PlayerIndexForController: [u32; 5], //GameInput::default().controllers.len() IS THE LENGTH, DOUBLE CHECK TO MATCH
 
     LowEntityCount: u32,
-    LowEntities: [low_entity; 4096],
+    LowEntities: [low_entity; 100000],
 
     HighEntityCount: u32,
     HighEntities_: [high_entity; 256],
 
     Backdrop: loaded_bitmap,
     Shadow: loaded_bitmap,
+    Tree: loaded_bitmap,
     HeroBitmaps: [hero_bitmaps; 4],
 }
 
@@ -251,17 +248,18 @@ fn InitializeArena(Arena: &mut memory_arena, Size: memory_index, Base: *mut u8) 
 #define PushArray(Arena, Count, type) (type *)PushSize_(Arena, (Count)*sizeof(type)) */
 
 // can remove Size and be called with PushStruct::<TileMap>(&memory_arena)
-unsafe fn PushStruct<T>(arena: &mut memory_arena) -> &mut T {
-    &mut *(PushSize_(arena, size_of::<T>()) as *mut T)
+fn PushStruct<T>(arena: &mut memory_arena) -> &mut T {
+    unsafe { return &mut *(PushSize_(arena, size_of::<T>()) as *mut T) }
 }
-unsafe fn PushArray<T>(arena: &mut memory_arena, count: u32) -> &mut T {
-    &mut *(PushSize_(arena, count as usize * size_of::<T>()) as *mut T)
+fn PushArray<T>(arena: &mut memory_arena, count: u32) -> &mut T {
+    unsafe { &mut *(PushSize_(arena, count as usize * size_of::<T>()) as *mut T) }
 }
-unsafe fn PushSize_(Arena: &mut memory_arena, Size: memory_index) -> *mut u8 {
-    //Assert((Arena->Used + Size) <= Arena->Size);
-    let result = Arena.Base.offset(Arena.Used.try_into().unwrap());
-    Arena.Used += Size;
-    return result;
+fn PushSize_(Arena: &mut memory_arena, Size: memory_index) -> *mut u8 {
+    unsafe {
+        let result = Arena.Base.offset(Arena.Used.try_into().unwrap());
+        Arena.Used += Size;
+        return result;
+    }
 }
 
 pub struct GameMemory {
@@ -486,38 +484,75 @@ fn GetLowEntity<'a>(GameState: &'a mut GameState, Index: u32) -> Option<&'a mut 
     return Entity;
 }
 
-//MAY BE BUGGED??
-// CHANGE TO USE RAW POINTERS? BECAUSE OF POINTER ARITHMETIC. GOING TO TRY USING REGULAR INDEXING INTO ARRAY ATM
-fn MakeEntityHighFrequency<'a>(
+fn GetCameraSpaceP(GameState: &GameState, EntityLow: &low_entity) -> v2 {
+    // NOTE(casey): Map the entity into camera space
+    let Diff = Subtract(
+        GameState.world.as_ref().unwrap(),
+        &EntityLow.P,
+        &GameState.CameraP,
+    );
+    let result = Diff.dXY;
+
+    return result;
+}
+
+//MUTABLE ALIASING
+fn MakeEntityHighFrequency_<'a>(
     GameState: &'a mut GameState,
+    EntityLow: &mut low_entity,
     LowIndex: u32,
+    CameraSpaceP: v2,
 ) -> Option<&'a mut high_entity> {
     let mut EntityHigh = None;
-
-    let mut EntityLow = &mut GameState.LowEntities[LowIndex as usize];
-    if EntityLow.HighEntityIndex != 0 {
-        EntityHigh = Some(&mut GameState.HighEntities_[EntityLow.HighEntityIndex as usize]);
-    } else {
+    if EntityLow.HighEntityIndex == 0 {
         if GameState.HighEntityCount < (GameState.HighEntities_.len()).try_into().unwrap() {
             let HighIndex = GameState.HighEntityCount;
             GameState.HighEntityCount += 1;
-            let Diff = Subtract(
-                GameState.world.as_ref().unwrap().TileMap.as_ref().unwrap(),
-                &EntityLow.P,
-                &GameState.CameraP,
-            );
+            //        EntityHigh = Some(&mut GameState.HighEntities_[EntityLow.HighEntityIndex as usize]);
+
             EntityLow.HighEntityIndex = HighIndex;
 
+            //entitty high
             let mut temp = &mut GameState.HighEntities_[HighIndex as usize];
-            temp.P = Diff.dXY;
+            temp.P = CameraSpaceP;
             temp.dP = v2::default();
-            temp.AbsTileZ = EntityLow.P.AbsTileZ;
+            temp.ChunkZ = EntityLow.P.ChunkZ.try_into().unwrap();
             temp.FacingDirection = 0;
             temp.LowEntityIndex = LowIndex;
 
             EntityHigh = Some(temp);
         } else {
             panic!();
+        }
+    }
+    return EntityHigh;
+}
+
+fn MakeEntityHighFrequency<'a>(
+    mut GameState: &'a mut GameState,
+    LowIndex: u32,
+) -> Option<&'a mut high_entity> {
+    let mut EntityHigh: Option<&mut high_entity> = None;
+
+    let mut HighEntityIndex = 0;
+    {
+        let EntityLow = &mut GameState.LowEntities[LowIndex as usize];
+        HighEntityIndex = EntityLow.HighEntityIndex;
+    }
+
+    if HighEntityIndex != 0 {
+        let EntityLow = &mut GameState.LowEntities[LowIndex as usize];
+        EntityHigh = Some(&mut GameState.HighEntities_[EntityLow.HighEntityIndex as usize]);
+    } else {
+        //MUTABLE ALIASING
+        let EntityLow = &GameState.LowEntities[LowIndex as usize];
+        let CameraSpaceP = GetCameraSpaceP(GameState, &EntityLow);
+
+        unsafe {
+            //MUTABLE ALIASING
+            let EntityLow = &mut GameState.LowEntities[LowIndex as usize] as *mut low_entity;
+            EntityHigh =
+                MakeEntityHighFrequency_(GameState, &mut *EntityLow, LowIndex, CameraSpaceP);
         }
     }
 
@@ -546,17 +581,16 @@ fn MakeEntityLowFrequency(GameState: &mut GameState, LowIndex: u32) {
     if HighIndex != 0 {
         let LastHighIndex = GameState.HighEntityCount - 1;
         if HighIndex != LastHighIndex {
-            let high_entities = &mut GameState.HighEntities_;
+            unsafe {
+                let LastEntity =
+                    &mut GameState.HighEntities_[LastHighIndex as usize] as *mut high_entity;
+                let mut DelEntity =
+                    &mut GameState.HighEntities_[HighIndex as usize] as *mut high_entity;
 
-            let LastEntity = &mut high_entities[LastHighIndex as usize];
-            GameState.LowEntities[LastEntity.LowEntityIndex as usize].HighEntityIndex = HighIndex;
-
-            let stored_last_entity = *LastEntity; //borrowing issues
-
-            let high_entities = &mut GameState.HighEntities_;
-            let DelEntity = &mut high_entities[HighIndex as usize];
-
-            *DelEntity = stored_last_entity;
+                *DelEntity = *LastEntity;
+                GameState.LowEntities[(*LastEntity).LowEntityIndex as usize].HighEntityIndex =
+                    HighIndex;
+            }
         }
         GameState.HighEntityCount -= 1;
         let EntityLow = &mut GameState.LowEntities[LowIndex as usize];
@@ -564,26 +598,46 @@ fn MakeEntityLowFrequency(GameState: &mut GameState, LowIndex: u32) {
     }
 }
 
-fn OffsetAndCheckFrequencyByArea(GameState: &mut GameState, Offset: v2, CameraBounds: rectangle2) {
-    let mut EntityIndex = 1;
-    while EntityIndex < GameState.HighEntityCount {
-        let High = &mut GameState.HighEntities_[EntityIndex as usize];
-        let LowEntityIndex = High.LowEntityIndex; // borrowing issues
+pub fn ValidateEntityPairs(GameState: &mut GameState) -> bool {
+    let mut Valid = true;
+
+    let mut HighEntityIndex = 1;
+    while HighEntityIndex < GameState.HighEntityCount {
+        let High = &mut GameState.HighEntities_[HighEntityIndex as usize];
+        Valid = Valid
+            && (GameState.LowEntities[High.LowEntityIndex as usize].HighEntityIndex
+                == HighEntityIndex);
+        HighEntityIndex += 1;
+    }
+
+    return Valid;
+}
+
+fn OffsetAndCheckFrequencyByArea(
+    GameState: &mut GameState,
+    Offset: v2,
+    HightFrequencyBounds: rectangle2,
+) {
+    let mut HighEntityIndex = 1;
+    while HighEntityIndex < GameState.HighEntityCount {
+        let High = &mut GameState.HighEntities_[HighEntityIndex as usize];
 
         High.P += Offset;
-        if IsInRectangle(CameraBounds, High.P) {
-            EntityIndex += 1;
+        if IsInRectangle(HightFrequencyBounds, High.P) {
+            HighEntityIndex += 1;
         } else {
+            let LowEntityIndex = High.LowEntityIndex; // borrowing issues
             MakeEntityLowFrequency(GameState, LowEntityIndex);
         }
     }
 }
-fn AddLowEntity(GameState: &mut GameState, Type: entity_type) -> u32 {
+fn AddLowEntity(GameState: &mut GameState, Type: entity_type, P: Option<&world_position>) -> u32 {
     let EntityIndex = GameState.LowEntityCount;
     GameState.LowEntityCount += 1;
-    GameState.LowEntities[EntityIndex as usize] = low_entity {
+    let EntityLow = &mut GameState.LowEntities[EntityIndex as usize];
+    *EntityLow = low_entity {
         Type: Type,
-        P: tile_map_position::default(),
+        P: world_position::default(),
         Width: 0.0,
         Height: 0.0,
         Collides: false,
@@ -591,25 +645,33 @@ fn AddLowEntity(GameState: &mut GameState, Type: entity_type) -> u32 {
 
         HighEntityIndex: 0,
     };
-    //dbg!(GameState.LowEntities[EntityIndex as usize]);
+    if P.is_some() {
+        EntityLow.P = *P.unwrap();
+        ChangeEntityLocation(
+            &mut GameState.WorldArena,
+            GameState.world.as_mut().unwrap(),
+            EntityIndex,
+            None,
+            P.unwrap(),
+        );
+    }
+
     return EntityIndex;
 }
 
 fn AddWall(GameState: &mut GameState, AbsTileX: u32, AbsTileY: u32, AbsTileZ: u32) -> u32 {
-    let EntityIndex = AddLowEntity(GameState, entity_type::EntityType_Wall);
-    let height = GameState
-        .world
-        .as_ref()
-        .unwrap()
-        .TileMap
-        .as_ref()
-        .unwrap()
-        .TileSideInMeters;
-    let EntityLow = GetLowEntity(GameState, EntityIndex).unwrap();
-    EntityLow.P.AbsTileX = AbsTileX;
-    EntityLow.P.AbsTileY = AbsTileY;
-    EntityLow.P.AbsTileZ = AbsTileZ;
-    EntityLow.Height = height; //have to move up, borrowing issues
+    let P = ChunkPositionFromTilePosition(
+        GameState.world.as_ref().unwrap(),
+        AbsTileX as i32,
+        AbsTileY as i32,
+        AbsTileZ as i32,
+    );
+    let EntityIndex = AddLowEntity(GameState, entity_type::EntityType_Wall, Some(&P));
+
+    let height = GameState.world.as_ref().unwrap().TileSideInMeters;
+    let mut EntityLow = GetLowEntity(GameState, EntityIndex).unwrap();
+
+    EntityLow.Height = height;
     EntityLow.Width = EntityLow.Height;
     EntityLow.Collides = true;
 
@@ -617,12 +679,9 @@ fn AddWall(GameState: &mut GameState, AbsTileX: u32, AbsTileY: u32, AbsTileZ: u3
 }
 
 fn AddPlayer(GameState: &mut GameState) -> u32 {
-    let EntityIndex = AddLowEntity(GameState, entity_type::EntityType_Hero);
+    let P = GameState.CameraP;
+    let EntityIndex = AddLowEntity(GameState, entity_type::EntityType_Hero, Some(&P));
     let EntityLow = GetLowEntity(GameState, EntityIndex).unwrap();
-    EntityLow.P.AbsTileX = 1;
-    EntityLow.P.AbsTileY = 3;
-    EntityLow.P.Offset_.X = 0.0;
-    EntityLow.P.Offset_.Y = 0.0;
     EntityLow.Height = 0.5; // 1.4f;
     EntityLow.Width = 1.0;
     EntityLow.Collides = true;
@@ -661,8 +720,7 @@ fn TestWall(
 
 //original takes gamestate opposed to tilemap but should probably pass in tilemap if it doesn't utilzie the gamestate struct fields
 fn MovePlayer(GameState: &mut GameState, Entity: entity, dt: f32, mut ddP: v2) {
-    let TileMap = GameState.world.as_mut().unwrap().TileMap.as_mut().unwrap();
-
+    let mut World = GameState.world.as_mut().unwrap();
     let ddPLength = LengthSq(ddP);
     if ddPLength > 1.0 {
         ddP *= 1.0 / ddPLength.sqrt();
@@ -808,7 +866,6 @@ fn MovePlayer(GameState: &mut GameState, Entity: entity, dt: f32, mut ddP: v2) {
 
                     let HitHigh = &GameState.HighEntities_[HitHighEntityIndex as usize];
                     let HitLow = &GameState.LowEntities[HitHigh.LowEntityIndex as usize];
-                    EntityHigh.AbsTileZ += HitLow.dAbsTileZ as u32; //MIGHT BE WRONG DEFAULT CONVERSION?
                 } else {
                     break;
                 }
@@ -832,20 +889,28 @@ fn MovePlayer(GameState: &mut GameState, Entity: entity, dt: f32, mut ddP: v2) {
                 }
             }
 
-            EntityLow.P = MapIntoTileSpace(
-                GameState.world.as_mut().unwrap().TileMap.as_mut().unwrap(),
+            let NewP = MapIntoChunkSpace(
+                GameState.world.as_ref().unwrap(),
                 GameState.CameraP,
                 EntityHigh.P,
             );
+            ChangeEntityLocation(
+                &mut GameState.WorldArena,
+                GameState.world.as_mut().unwrap(),
+                Entity.LowIndex,
+                Some(&EntityLow.P),
+                &NewP,
+            );
+            EntityLow.P = NewP;
         }
         _ => {}
     }
 }
 
-fn SetCamera(GameState: &mut GameState, NewCameraP: tile_map_position) {
-    let TileMap = GameState.world.as_mut().unwrap().TileMap.as_mut().unwrap();
+fn SetCamera(GameState: &mut GameState, NewCameraP: world_position) {
+    let world = GameState.world.as_mut().unwrap();
 
-    let dCameraP = Subtract(TileMap, &NewCameraP, &GameState.CameraP);
+    let dCameraP = Subtract(world, &NewCameraP, &GameState.CameraP);
     GameState.CameraP = NewCameraP;
 
     // TODO(casey): I am totally picking these numbers randomly!
@@ -853,7 +918,7 @@ fn SetCamera(GameState: &mut GameState, NewCameraP: tile_map_position) {
     let TileSpanY = 9 * 3;
     let CameraBounds = RectCenterDim(
         v2::default(),
-        TileMap.TileSideInMeters
+        world.TileSideInMeters
             * v2 {
                 X: TileSpanX as f32,
                 Y: TileSpanY as f32,
@@ -862,25 +927,58 @@ fn SetCamera(GameState: &mut GameState, NewCameraP: tile_map_position) {
     let EntityOffsetForFrame = -dCameraP.dXY;
     OffsetAndCheckFrequencyByArea(GameState, EntityOffsetForFrame, CameraBounds);
 
-    let MinTileX = NewCameraP.AbsTileX - TileSpanX / 2;
-    let MaxTileX = NewCameraP.AbsTileX + TileSpanX / 2;
-    let MinTileY = NewCameraP.AbsTileY - TileSpanY / 2;
-    let MaxTileY = NewCameraP.AbsTileY + TileSpanY / 2;
-
-    let mut EntityIndex = 1;
-    while EntityIndex < GameState.LowEntityCount {
-        let Low = &mut GameState.LowEntities[EntityIndex as usize];
-        if Low.HighEntityIndex == 0 {
-            if (Low.P.AbsTileZ == NewCameraP.AbsTileZ)
-                && (Low.P.AbsTileX >= MinTileX)
-                && (Low.P.AbsTileX <= MaxTileX)
-                && (Low.P.AbsTileY <= MinTileY)
-                && (Low.P.AbsTileY >= MaxTileY)
-            {
-                MakeEntityHighFrequency(GameState, EntityIndex);
+    let world = GameState.world.as_mut().unwrap();
+    // TODO(casey): Do this in terms of tile chunks!
+    let MinChunkP = MapIntoChunkSpace(world, NewCameraP, GetMinCorner(CameraBounds));
+    let MaxChunkP = MapIntoChunkSpace(world, NewCameraP, GetMaxCorner(CameraBounds));
+    let mut ChunkY = MinChunkP.ChunkY;
+    while ChunkY <= MaxChunkP.ChunkY {
+        let mut ChunkX = MinChunkP.ChunkX;
+        while ChunkX <= MaxChunkP.ChunkX {
+            let world = GameState.world.as_mut().unwrap();
+            let Chunk = GetWorldChunk(
+                &mut world.ChunkHash,
+                ChunkX,
+                ChunkY,
+                NewCameraP.ChunkZ,
+                None,
+            );
+            if !Chunk.is_null() {
+                unsafe {
+                    let mut Block = &mut (*Chunk).FirstBlock.unwrap() as *mut world_entity_block;
+                    while !Block.is_null() {
+                        for EntityIndexIndex in 0..(*Block).EntityCount
+                        /* (uint32 EntityIndexIndex = 0;
+                        EntityIndexIndex < Block->EntityCount;
+                        ++EntityIndexIndex) */
+                        {
+                            dbg!("running setting entity to high");
+                            let LowEntityIndex = (*Block).LowEntityIndex[EntityIndexIndex as usize];
+                            let Low = &mut GameState.LowEntities[LowEntityIndex as usize]
+                                as *mut low_entity;
+                            if ((*Low).HighEntityIndex == 0) {
+                                let CameraSpaceP = GetCameraSpaceP(GameState, &*Low);
+                                if (IsInRectangle(CameraBounds, CameraSpaceP)) {
+                                    MakeEntityHighFrequency_(
+                                        GameState,
+                                        &mut *Low,
+                                        LowEntityIndex,
+                                        CameraSpaceP,
+                                    );
+                                }
+                            }
+                        }
+                        if (*Block).Next.is_some() {
+                            Block = (*Block).Next.unwrap();
+                        } else {
+                            Block = null_mut();
+                        }
+                    }
+                }
             }
+            ChunkX += 1;
         }
-        EntityIndex += 1;
+        ChunkY += 1;
     }
 }
 
@@ -899,7 +997,7 @@ pub extern "C" fn game_update_and_render(
             let mut game_state = &mut *(memory.permanent_storage as *mut GameState);
 
             //reserved for null entity
-            AddLowEntity(game_state, entity_type::EntityType_Null);
+            AddLowEntity(game_state, entity_type::EntityType_Null, None);
             game_state.HighEntityCount = 1;
 
             game_state.Backdrop = DEBUGLoadBMP(
@@ -912,6 +1010,11 @@ pub extern "C" fn game_update_and_render(
                 thread,
                 memory.debug_platform_read_entire_file,
                 "test/test_hero_shadow.bmp",
+            );
+            game_state.Tree = DEBUGLoadBMP(
+                thread,
+                memory.debug_platform_read_entire_file,
+                "test2/tree00.bmp",
             );
             let mut Bitmap = &mut game_state.HeroBitmaps[0];
             Bitmap.Head = DEBUGLoadBMP(
@@ -1002,42 +1105,18 @@ pub extern "C" fn game_update_and_render(
                         .offset(size_of::<GameState>().try_into().unwrap()),
                 );
                 game_state.world = Some(PushStruct::<world>(world_arena));
+                InitializeWorld(game_state.world.as_mut().unwrap(), 1.4);
             }
-            {
-                let World = game_state.world.as_mut().unwrap();
-                let world_arena = &mut game_state.WorldArena;
-                World.TileMap = Some(PushStruct::<tile_map>(world_arena)); //REFERENCES CAN BE __MOVED__, THEY ARE NOT COPIED, SO WORLD.TILEMAP IS NOW THE NEW SCOPE OF THE ENTIRE REFERENCE LIFE TIME.
-                let mut TileMap = World.TileMap.as_mut().unwrap();
-                TileMap.ChunkShift = 4;
-                TileMap.ChunkMask = (1 << TileMap.ChunkShift) - 1;
-                TileMap.ChunkDim = 1 << TileMap.ChunkShift;
-
-                TileMap.TileChunkCountX = 128;
-                TileMap.TileChunkCountY = 128;
-                TileMap.TileChunkCountZ = 2;
-                TileMap.TileSideInMeters = 1.4;
-
-                {
-                    let game_state = &mut *(memory.permanent_storage as *mut GameState);
-                    //let World = game_state.world.as_mut().unwrap();
-                    let world_arena = &mut game_state.WorldArena;
-                    TileMap.TileChunks = &mut *PushArray::<tile_chunk>(
-                        world_arena,
-                        TileMap.TileChunkCountX * TileMap.TileChunkCountY * TileMap.TileChunkCountZ,
-                    );
-                }
-            }
-
             let mut RandomNumberIndex = 0;
             let TilesPerWidth = 17;
             let TilesPerHeight = 9;
 
-            /*             let mut ScreenX = std::u32::MAX / 2;
-            let mut ScreenY = std::u32::MAX / 2; */
-            let mut ScreenX = 0;
-            let mut ScreenY = 0;
-
-            let mut AbsTileZ = 0;
+            let ScreenBaseX = 0;
+            let ScreenBaseY = 0;
+            let ScreenBaseZ = 0;
+            let mut ScreenX = ScreenBaseX;
+            let mut ScreenY = ScreenBaseY;
+            let mut AbsTileZ = ScreenBaseZ;
 
             // TODO(casey): Replace all this with real world generation!
             let mut DoorLeft = false;
@@ -1046,7 +1125,7 @@ pub extern "C" fn game_update_and_render(
             let mut DoorBottom = false;
             let mut DoorUp = false;
             let mut DoorDown = false;
-            for ScreenIndex in 0..2
+            for ScreenIndex in 0..2000
             /*    (uint32 ScreenIndex = 0;
             ScreenIndex < 100;
             ++ScreenIndex) */
@@ -1066,7 +1145,7 @@ pub extern "C" fn game_update_and_render(
                 let mut createdZDoor = false;
                 if RandomChoice == 2 {
                     createdZDoor = true;
-                    if AbsTileZ == 0 {
+                    if AbsTileZ == ScreenBaseZ {
                         DoorUp = true;
                     } else {
                         DoorDown = true;
@@ -1123,15 +1202,6 @@ pub extern "C" fn game_update_and_render(
 
                         //2 MUTABLE BORROW IS ALLOWED IF THE LAST INSTANCE OF THE MUTABLE BORROW ISNT REUSED
                         let game_state = &mut *(memory.permanent_storage as *mut GameState);
-                        let World = game_state.world.as_mut().unwrap();
-                        SetTileValue(
-                            &mut game_state.WorldArena,
-                            &mut World.TileMap.as_mut().unwrap(),
-                            AbsTileX,
-                            AbsTileY,
-                            AbsTileZ,
-                            TileValue,
-                        );
 
                         if TileValue == 2 {
                             AddWall(game_state, AbsTileX, AbsTileY, AbsTileZ);
@@ -1154,10 +1224,10 @@ pub extern "C" fn game_update_and_render(
                 DoorTop = false;
 
                 if RandomChoice == 2 {
-                    if AbsTileZ == 0 {
-                        AbsTileZ = 1;
+                    if AbsTileZ == ScreenBaseZ {
+                        AbsTileZ = ScreenBaseZ + 1;
                     } else {
-                        AbsTileZ = 0;
+                        AbsTileZ = ScreenBaseZ;
                     }
                 } else if RandomChoice == 1 {
                     ScreenX += 1;
@@ -1166,9 +1236,14 @@ pub extern "C" fn game_update_and_render(
                 }
             }
 
-            let mut NewCameraP = tile_map_position::default();
-            NewCameraP.AbsTileX = 17 / 2;
-            NewCameraP.AbsTileY = 9 / 2;
+            let mut NewCameraP = world_position::default();
+            NewCameraP = ChunkPositionFromTilePosition(
+                game_state.world.as_ref().unwrap(),
+                (ScreenBaseX * TilesPerWidth + 17 / 2) as i32,
+                (ScreenBaseY * TilesPerHeight + 9 / 2) as i32,
+                ScreenBaseZ as i32,
+            );
+
             let game_state = &mut *(memory.permanent_storage as *mut GameState);
             SetCamera(game_state, NewCameraP);
 
@@ -1177,10 +1252,9 @@ pub extern "C" fn game_update_and_render(
 
         let game_state = &mut *(memory.permanent_storage as *mut GameState);
         let World = game_state.world.as_mut().unwrap();
-        let TileMap = World.TileMap.as_ref().unwrap();
 
         let TileSideInPixels = 60;
-        let MetersToPixels = TileSideInPixels as f32 / TileMap.TileSideInMeters as f32;
+        let MetersToPixels = TileSideInPixels as f32 / World.TileSideInMeters as f32;
 
         let LowerLeftX = -(TileSideInPixels / 2) as f32;
         let LowerLeftY = buffer.height as f32;
@@ -1249,44 +1323,25 @@ pub extern "C" fn game_update_and_render(
                     let game_state = &mut *(memory.permanent_storage as *mut GameState);
                     let mut NewCameraP = game_state.CameraP;
 
-                    NewCameraP.AbsTileZ = Low.P.AbsTileZ;
+                    NewCameraP.ChunkZ = Low.P.ChunkZ;
 
-                    if High.P.X > (9.0 * TileMap.TileSideInMeters) {
+                    /*  if High.P.X > (9.0 * World.TileSideInMeters) {
                         NewCameraP.AbsTileX += 17;
                     }
-                    if High.P.X < -(9.0 * TileMap.TileSideInMeters) {
+                    if High.P.X < -(9.0 * World.TileSideInMeters) {
                         NewCameraP.AbsTileX -= 17;
                     }
-                    if High.P.Y > (5.0 * TileMap.TileSideInMeters) {
+                    if High.P.Y > (5.0 * World.TileSideInMeters) {
                         NewCameraP.AbsTileY += 9;
                     }
-                    if High.P.Y < -(5.0 * TileMap.TileSideInMeters) {
+                    if High.P.Y < -(5.0 * World.TileSideInMeters) {
                         NewCameraP.AbsTileY -= 9;
-                    }
-
+                    } */
+                    NewCameraP = Low.P;
                     SetCamera(game_state, NewCameraP);
                 }
                 _ => {}
             }
-            /* #else
-                    if(CameraFollowingEntity.High.P.X > (1.0f*TileMap.TileSideInMeters))
-                    {
-                        NewCameraP.AbsTileX += 1;
-                    }
-                    if(CameraFollowingEntity.High.P.X < -(1.0f*TileMap.TileSideInMeters))
-                    {
-                        NewCameraP.AbsTileX -= 1;
-                    }
-                    if(CameraFollowingEntity.High.P.Y > (1.0f*TileMap.TileSideInMeters))
-                    {
-                        NewCameraP.AbsTileY += 1;
-                    }
-                    if(CameraFollowingEntity.High.P.Y < -(1.0f*TileMap.TileSideInMeters))
-                    {
-                        NewCameraP.AbsTileY -= 1;
-                    }
-            #endif
-                     */
             // TODO(casey): Map new entities in and old entities out!!!
             // TODO(casey): Mapping tiles and stairs into the entity set!
         }
@@ -1294,7 +1349,20 @@ pub extern "C" fn game_update_and_render(
         //
         // NOTE(casey): Render
         //
-        DrawBitmap(buffer, &game_state.Backdrop, 0.0, 0.0, 0, 0, 1.0);
+
+        DrawRectangle(
+            buffer,
+            v2 { X: 0.0, Y: 0.0 },
+            v2 {
+                X: buffer.width as f32,
+                Y: buffer.height as f32,
+            },
+            0.5,
+            0.5,
+            0.5,
+        );
+
+        //DrawBitmap(buffer, &game_state.Backdrop, 0.0, 0.0, 0, 0, 1.0);
 
         let ScreenCenterX = 0.5 * buffer.width as f32;
         let ScreenCenterY = 0.5 * buffer.height as f32;
@@ -1347,6 +1415,7 @@ pub extern "C" fn game_update_and_render(
                 }
             }
         } */
+        // println!("{}", game_state.HighEntityCount);
         for HighEntityIndex in 1..game_state.HighEntityCount {
             let mut HighEntity = &mut game_state.HighEntities_[HighEntityIndex as usize];
             let LowEntity = &mut game_state.LowEntities[HighEntity.LowEntityIndex as usize];
@@ -1419,13 +1488,23 @@ pub extern "C" fn game_update_and_render(
                     1.0,
                 );
             } else {
-                DrawRectangle(
+                /*                 DrawRectangle(
                     buffer,
                     PlayerLeftTop,
                     PlayerLeftTop + MetersToPixels * EntityWidthHeight,
                     PlayerR,
                     PlayerG,
                     PlayerB,
+                ); */
+                println!("DRAWING WALLS");
+                DrawBitmap(
+                    buffer,
+                    &game_state.Tree,
+                    PlayerGroundPointX,
+                    PlayerGroundPointY + Z,
+                    40,
+                    80,
+                    1.0,
                 );
             }
         }
